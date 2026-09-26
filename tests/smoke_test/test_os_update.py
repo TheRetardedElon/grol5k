@@ -6,6 +6,14 @@ import pytest
 
 _LOGGER = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.skip(
+    reason=(
+        "GROL5000 must not OTA onto upstream Home Assistant OS stable. "
+        "This inherited suite pulls version.home-assistant.io and replaces "
+        "the GROL slot with stock HAOS. Re-enable against a GROL version index."
+    )
+)
+
 
 @pytest.mark.dependency()
 @pytest.mark.timeout(120)
