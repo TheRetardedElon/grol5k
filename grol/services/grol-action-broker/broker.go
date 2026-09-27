@@ -23,25 +23,31 @@ var eligible = map[string]string{
 }
 
 type Proposal struct {
-	ID              string `json:"id"`
-	Service         string `json:"service"`
-	EntityID        string `json:"entity_id"`
-	Reason          string `json:"reason,omitempty"`
-	State           string `json:"state"`
-	Decision        string `json:"decision"`
-	Error           string `json:"error,omitempty"`
-	RequiresConfirm bool   `json:"requires_confirm"`
-	MutationCapable bool   `json:"mutation_capable"`
-	ApplyEnabled    bool   `json:"apply_enabled"`
-	Untrusted       bool   `json:"untrusted"`
-	CreatedAt       string `json:"created_at"`
-	ExpiresAt       string `json:"expires_at,omitempty"`
-	ConfirmedAt     string `json:"confirmed_at,omitempty"`
+	ID              string              `json:"id"`
+	Service         string              `json:"service"`
+	EntityID        string              `json:"entity_id"`
+	Reason          string              `json:"reason,omitempty"`
+	State           string              `json:"state"`
+	Decision        string              `json:"decision"`
+	Error           string              `json:"error,omitempty"`
+	RequiresConfirm bool                `json:"requires_confirm"`
+	MutationCapable bool                `json:"mutation_capable"`
+	ApplyEnabled    bool                `json:"apply_enabled"`
+	Untrusted       bool                `json:"untrusted"`
+	CreatedAt       string              `json:"created_at"`
+	ExpiresAt       string              `json:"expires_at,omitempty"`
+	ConfirmedAt     string              `json:"confirmed_at,omitempty"`
+	ConfirmDigest   string              `json:"confirm_digest,omitempty"`
+	ResolvedTargets []map[string]string `json:"resolved_targets,omitempty"`
 }
 
 type Grant struct {
 	EntityID        string `json:"entity_id"`
 	Service         string `json:"service"`
+	Domain          string `json:"domain"`
+	RegistryID      string `json:"registry_id"`
+	Platform        string `json:"platform"`
+	Authorizing     bool   `json:"authorizing"`
 	RequiresConfirm bool   `json:"requires_confirm"`
 	CreatedAt       string `json:"created_at"`
 }
@@ -178,6 +184,8 @@ func (b *Broker) evaluate(req proposeReq) Proposal {
 		p.Error = "unknown_entity"
 		return p
 	}
+	dev := findDevice(snap, req.EntityID)
+	regID, liveDomain, platform, proven := deviceIdentity(dev)
 	b.mu.Lock()
 	g, granted := b.grants[grantKey(req.EntityID, req.Service)]
 	b.mu.Unlock()
@@ -187,10 +195,27 @@ func (b *Broker) evaluate(req proposeReq) Proposal {
 		p.Error = "not_granted"
 		return p
 	}
-	p.RequiresConfirm = g.RequiresConfirm
+	if !g.Authorizing || g.RegistryID == "" || g.Platform == "" || !proven {
+		p.State = "not_granted"
+		p.Decision = "denied"
+		p.Error = "grant_identity_unproven"
+		return p
+	}
+	if g.RegistryID != regID || g.Domain != liveDomain || g.Platform != platform {
+		p.State = "denied"
+		p.Decision = "denied"
+		p.Error = "grant_identity_drift"
+		return p
+	}
+	p.RequiresConfirm = true
 	p.State = "pending_confirmation"
 	p.Decision = "confirmation_required"
-	p.Error = ""
 	p.ExpiresAt = now.Add(confirmTTL).Format(time.RFC3339)
+	targets := []map[string]string{{
+		"registry_id": regID, "domain": liveDomain, "platform": platform, "entity_id": req.EntityID,
+	}}
+	args := map[string]any{"service": req.Service, "entity_id": req.EntityID}
+	p.ConfirmDigest = confirmDigest(req.Service, args, targets, "confirmation_required")
+	p.ResolvedTargets = targets
 	return p
 }
