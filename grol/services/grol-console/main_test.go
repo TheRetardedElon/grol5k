@@ -25,6 +25,12 @@ func TestStatusReportsBotAndNestedGatewayHealth(t *testing.T) {
 				"provisioned":true,
 				"model":"test-model",
 				"reachable":true
+			},
+			"observer":{
+				"ok":true,
+				"service":"grol-healthd",
+				"reachable":true,
+				"hostd":{"reachable":true}
 			}
 		}`)
 	}))
@@ -44,6 +50,10 @@ func TestStatusReportsBotAndNestedGatewayHealth(t *testing.T) {
 	gw, _ := body["gateway"].(map[string]any)
 	if gw["reachable"] != true || gw["provisioned"] != true || gw["model"] != "test-model" {
 		t.Fatalf("unexpected gateway status: %#v", body)
+	}
+	observer, _ := body["observer"].(map[string]any)
+	if observer["reachable"] != true || observer["service"] != "grol-healthd" {
+		t.Fatalf("unexpected observer status: %#v", body)
 	}
 }
 
@@ -89,6 +99,8 @@ func TestProxyReadSessionsAndActivity(t *testing.T) {
 			_, _ = io.WriteString(w, `{"ok":true,"sessions":[{"id":"abc","turns":2}]}`)
 		case "/v1/activity":
 			_, _ = io.WriteString(w, `{"ok":true,"activity":[{"session_id":"abc","role":"user","preview":"hi"}]}`)
+		case "/v1/system":
+			_, _ = io.WriteString(w, `{"ok":true,"snapshot":{"status":"ok","system":{"grol_version":"18.4.dev"}}}`)
 		default:
 			http.NotFound(w, r)
 		}
@@ -101,6 +113,7 @@ func TestProxyReadSessionsAndActivity(t *testing.T) {
 	}{
 		{"/v1/sessions", "\"sessions\""},
 		{"/v1/activity", "\"activity\""},
+		{"/v1/system", "\"snapshot\""},
 	} {
 		rr := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, "/api/read", nil)
