@@ -13,20 +13,26 @@ import (
 const consoleMaxBody = 64 * 1024
 
 func main() {
-	addr := flag.String("addr", "0.0.0.0:8790", "listen address")
-	gw := flag.String("gateway", "http://127.0.0.1:8789", "grol-ai-gateway base URL")
+	addr := flag.String("addr", "127.0.0.1:8790", "listen address (loopback by default; explicitly bind LAN only for development)")
+	upstream := flag.String("bot", "http://127.0.0.1:8788", "grol-bot base URL")
 	flag.Parse()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", serveIndex)
 	mux.HandleFunc("GET /api/status", func(w http.ResponseWriter, _ *http.Request) {
-		status(w, *gw)
+		status(w, *upstream)
 	})
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
-		proxyChat(w, r, *gw)
+		proxyChat(w, r, *upstream)
+	})
+	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		proxyRead(w, r, *upstream, "/v1/sessions")
+	})
+	mux.HandleFunc("GET /api/activity", func(w http.ResponseWriter, r *http.Request) {
+		proxyRead(w, r, *upstream, "/v1/activity")
 	})
 
-	log.Printf("grol-console listen %s gateway %s", *addr, *gw)
+	log.Printf("grol-console listen %s bot %s", *addr, *upstream)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -42,21 +48,26 @@ func serveIndex(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(indexHTML))
 }
 
-func status(w http.ResponseWriter, gw string) {
+func status(w http.ResponseWriter, upstream string) {
 	out := map[string]any{
 		"ok":      true,
 		"product": "GROL5000",
 		"service": "grol-console",
+		"bot":     map[string]any{"reachable": false},
 		"gateway": map[string]any{"reachable": false},
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
-	resp, err := client.Get(strings.TrimRight(gw, "/") + "/health")
+	resp, err := client.Get(strings.TrimRight(upstream, "/") + "/health")
 	if err == nil {
 		defer resp.Body.Close()
 		var health map[string]any
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&health); err == nil {
 			health["reachable"] = true
+			out["bot"] = health
 			out["gateway"] = health
+			if nested, ok := health["gateway"].(map[string]any); ok {
+				out["gateway"] = nested
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -64,7 +75,42 @@ func status(w http.ResponseWriter, gw string) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-func proxyChat(w http.ResponseWriter, r *http.Request, gw string) {
+func proxyRead(w http.ResponseWriter, r *http.Request, upstream, path string) {
+	req, err := http.NewRequestWithContext(
+		r.Context(),
+		http.MethodGet,
+		strings.TrimRight(upstream, "/")+path,
+		nil,
+	)
+	if err != nil {
+		http.Error(w, "bad bot", http.StatusBadGateway)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    false,
+			"error": "bot_unreachable",
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 2*1024*1024))
+}
+
+func proxyChat(w http.ResponseWriter, r *http.Request, upstream string) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, consoleMaxBody+1))
 	if err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
@@ -78,11 +124,11 @@ func proxyChat(w http.ResponseWriter, r *http.Request, gw string) {
 	req, err := http.NewRequestWithContext(
 		r.Context(),
 		http.MethodPost,
-		strings.TrimRight(gw, "/")+"/v1/chat",
+		strings.TrimRight(upstream, "/")+"/v1/chat",
 		strings.NewReader(string(body)),
 	)
 	if err != nil {
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+		http.Error(w, "bad bot", http.StatusBadGateway)
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -96,7 +142,7 @@ func proxyChat(w http.ResponseWriter, r *http.Request, gw string) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok":       true,
 			"degraded": true,
-			"text":     "grol-ai-gateway is not running. Start it on 127.0.0.1:8789.",
+			"text":     "grol-bot is not running. Start it on 127.0.0.1:8788.",
 		})
 		return
 	}

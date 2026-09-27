@@ -60,16 +60,16 @@ button.send:disabled { opacity:.45; cursor:default; }
   <button class="item" data-view="activity">≡ <span>Activity</span></button>
   <button class="item" data-view="build">◆ <span>Build</span></button>
   <button class="item" data-view="settings">⚙ <span>Settings</span></button>
-  <div class="navfoot">M3A · read-only except chat</div>
+  <div class="navfoot">M3B · resident bot · no mutations</div>
 </nav>
 <main>
   <header>
-    <div><span id="dot"></span><span id="state">checking gateway</span></div>
+    <div><span id="dot"></span><span id="state">checking resident services</span></div>
     <div id="viewTitle">Grok Bot</div>
   </header>
 
   <section id="botView">
-    <p class="note">Grok Bot currently talks only to grol-ai-gateway. No Home Assistant, host, Docker, broker, or Build mutation path exists in M3A.</p>
+    <p class="note">Grok Bot owns the local session and context, then talks to grol-ai-gateway. No Home Assistant, host, Docker, broker, or Build mutation path exists in M3B.</p>
     <div id="messages"></div>
     <form class="composer" id="chatForm">
       <input id="q" autocomplete="off" placeholder="Talk to Grok Bot"/>
@@ -95,6 +95,7 @@ const send = document.getElementById('send');
 const botView = document.getElementById('botView');
 const placeholder = document.getElementById('placeholder');
 const viewTitle = document.getElementById('viewTitle');
+let sessionId = localStorage.getItem('grol.bot.session_id') || '';
 
 const labels = {
   bot:['Grok Bot',''],
@@ -102,7 +103,7 @@ const labels = {
   devices:['Devices','Read-only Home Assistant entity/device inventory lands here in M3C.'],
   system:['System','Host, OS, Supervisor, Core, gateway, and broker health land here in M3C.'],
   activity:['Activity','Grok Bot proposals, approvals, and system events land here.'],
-  build:['Build','Grok Build remains isolated and unavailable in M3A.'],
+  build:['Build','Grok Build remains isolated and unavailable in M3B.'],
   settings:['Settings','Provisioning and operator preferences land here without exposing secrets to the model.']
 };
 
@@ -125,12 +126,15 @@ async function refresh() {
   try {
     const response = await fetch('/api/status', {cache:'no-store'});
     const s = await response.json();
+    const b = s.bot || {};
     const g = s.gateway || {};
-    const reachable = g.reachable === true && g.ok === true;
-    dot.style.background = reachable ? (g.provisioned ? 'var(--good)' : 'var(--warn)') : 'var(--acc)';
-    if (!reachable) state.textContent = 'gateway unreachable';
-    else if (!g.provisioned) state.textContent = 'gateway online · Grok not provisioned';
-    else state.textContent = 'gateway online · ' + (g.model || 'Grok') + ' · streaming';
+    const botOK = b.reachable === true && b.ok === true;
+    const gatewayOK = g.reachable === true && g.ok === true;
+    dot.style.background = botOK && gatewayOK ? (g.provisioned ? 'var(--good)' : 'var(--warn)') : 'var(--acc)';
+    if (!botOK) state.textContent = 'grol-bot unreachable';
+    else if (!gatewayOK) state.textContent = 'bot online · gateway unreachable';
+    else if (!g.provisioned) state.textContent = 'bot online · gateway online · Grok not provisioned';
+    else state.textContent = 'bot online · ' + (g.model || 'Grok') + ' · streaming';
   } catch (_) {
     dot.style.background = 'var(--acc)';
     state.textContent = 'console error';
@@ -159,7 +163,11 @@ async function streamChat(text) {
     const response = await fetch('/api/chat', {
       method:'POST',
       headers:{'Content-Type':'application/json','Accept':'text/event-stream'},
-      body:JSON.stringify({messages:[{role:'user', content:text}], stream:true})
+      body:JSON.stringify({
+        session_id: sessionId,
+        messages:[{role:'user', content:text}],
+        stream:true
+      })
     });
 
     const contentType = response.headers.get('content-type') || '';
@@ -174,6 +182,10 @@ async function streamChat(text) {
 
     if (!contentType.startsWith('text/event-stream')) {
       const j = await response.json();
+      if (j.session_id) {
+        sessionId = j.session_id;
+        localStorage.setItem('grol.bot.session_id', sessionId);
+      }
       botBody.textContent = j.text || JSON.stringify(j);
       return;
     }
@@ -195,7 +207,12 @@ async function streamChat(text) {
         const evt = parseEventBlock(block);
         if (!evt) continue;
 
-        if (evt.event === 'delta') {
+        if (evt.event === 'session') {
+          if (evt.data.session_id) {
+            sessionId = evt.data.session_id;
+            localStorage.setItem('grol.bot.session_id', sessionId);
+          }
+        } else if (evt.event === 'delta') {
           botBody.textContent += evt.data.text || '';
           gotText = true;
           messages.scrollTop = messages.scrollHeight;
