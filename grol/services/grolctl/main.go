@@ -16,15 +16,17 @@ func main() {
 	obsURL := flag.String("observer", "http://127.0.0.1:8787", "grol-healthd base URL")
 	botURL := flag.String("bot", "http://127.0.0.1:8788", "grol-bot base URL")
 	brkURL := flag.String("broker", "http://127.0.0.1:8785", "grol-action-broker base URL")
+	opTok := flag.String("operator-token", "", "operator token for grant/confirm (never used by Bot)")
 	flag.Parse()
 
 	args := flag.Args()
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: grolctl [--json] status|system status|house snapshot|devices list|device get ID|activity recent|propose SERVICE ENTITY")
+		fmt.Fprintln(os.Stderr, "usage: grolctl [--json] status|propose SERVICE ENTITY|grants list|grant add ENTITY SERVICE|proposal get ID|proposal confirm ID|audit recent")
 		os.Exit(2)
 	}
 
 	cli := NewClientWithBroker(*haURL, *obsURL, *botURL, *brkURL)
+	cli.OperatorToken = *opTok
 	out, code := run(cli, args)
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
@@ -60,52 +62,40 @@ func run(cli *Client, args []string) (map[string]any, int) {
 		return readResult(cli.Activity())
 	case args[0] == "propose":
 		if len(args) < 3 {
-			return map[string]any{"ok": false, "error": "usage", "message": "grolctl propose SERVICE ENTITY_ID"}, 2
+			return map[string]any{"ok": false, "error": "usage"}, 2
 		}
 		return readResult(cli.Propose(args[1], args[2]))
+	case verb == "grants" || verb == "grants list":
+		return readResult(cli.Grants())
+	case args[0] == "grant" && len(args) >= 4 && args[1] == "add":
+		return readResult(cli.GrantAdd(args[2], args[3]))
+	case args[0] == "grant" && len(args) >= 4 && args[1] == "revoke":
+		return readResult(cli.GrantRevoke(args[2], args[3]))
+	case args[0] == "proposal" && len(args) >= 3 && args[1] == "get":
+		return readResult(cli.ProposalGet(args[2]))
+	case args[0] == "proposal" && len(args) >= 3 && args[1] == "confirm":
+		return readResult(cli.ProposalConfirm(args[2]))
+	case verb == "audit" || verb == "audit recent":
+		return readResult(cli.Audit())
 	case args[0] == "raw-call", args[0] == "turn_on", args[0] == "call", args[0] == "apply":
-		return map[string]any{
-			"ok": false, "error": "mutation_disabled", "mutation_capable": false, "untrusted": true,
-			"message": "Use grolctl propose SERVICE ENTITY. Apply is broker-owned and disabled in M4.0.",
-		}, 3
+		return map[string]any{"ok": false, "error": "mutation_disabled", "mutation_capable": false, "untrusted": true}, 3
 	default:
-		return map[string]any{
-			"ok": false, "error": "unknown_verb", "verb": verb,
-			"message": "allowed: status, system status, house snapshot, devices list, device get ID, activity recent, propose SERVICE ENTITY",
-		}, 2
+		return map[string]any{"ok": false, "error": "unknown_verb", "verb": verb}, 2
 	}
 }
 
 func renderText(out map[string]any) string {
 	var b strings.Builder
 	if ok, _ := out["ok"].(bool); !ok {
-		if errStr, _ := out["error"].(string); errStr != "" {
-			fmt.Fprintf(&b, "error: %s\n", errStr)
-		}
-		if msg, _ := out["message"].(string); msg != "" {
-			fmt.Fprintf(&b, "%s\n", msg)
-		}
+		fmt.Fprintf(&b, "error: %v\n", out["error"])
 		return b.String()
 	}
 	if p, ok := out["proposal"].(map[string]any); ok {
-		fmt.Fprintf(&b, "proposal %v\n%s %s\ndecision: %v\nerror: %v\n", p["id"], p["service"], p["entity_id"], p["decision"], p["error"])
-		fmt.Fprintf(&b, "Read only apply: yes\nMutation capable: no\n")
+		fmt.Fprintf(&b, "proposal %v\nstate: %v\ndecision: %v\nerror: %v\n", p["id"], p["state"], p["decision"], p["error"])
 		return b.String()
 	}
-	if _, ok := out["haobs"]; ok {
-		fmt.Fprintf(&b, "haobs process:     %v\n", out["haobs"])
-		fmt.Fprintf(&b, "house reachable:   %v\n", out["house_reachable"])
-		fmt.Fprintf(&b, "healthd process:   %v\n", out["healthd"])
-		fmt.Fprintf(&b, "system reachable:  %v\n", out["system_reachable"])
-		fmt.Fprintf(&b, "grol-bot process:  %v\n", out["bot"])
-		fmt.Fprintf(&b, "broker process:    %v\n", out["broker"])
-	}
-	if entity, ok := out["device"].(map[string]any); ok {
-		fmt.Fprintf(&b, "%s\nstate: %v\n", entity["entity_id"], entity["state"])
-	}
-	if c, ok := out["count"]; ok {
-		fmt.Fprintf(&b, "%v entities visible\n", c)
-	}
-	fmt.Fprintf(&b, "Read only: yes\nMutation capable: no\n")
+	raw, _ := json.MarshalIndent(out, "", "  ")
+	b.Write(raw)
+	b.WriteByte('\n')
 	return b.String()
 }

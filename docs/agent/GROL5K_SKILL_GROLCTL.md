@@ -1,8 +1,6 @@
 # GROL5K skill: grolctl
 
-Approved local commands.
-
-Reads:
+Bot-approved:
 
 ```
 grolctl.exe --json status
@@ -11,22 +9,26 @@ grolctl.exe --json house snapshot
 grolctl.exe --json devices list
 grolctl.exe --json device get <entity_id>
 grolctl.exe --json activity recent
+grolctl.exe --json propose SERVICE ENTITY
+grolctl.exe --json proposal get <id>
+grolctl.exe --json grants list
+grolctl.exe --json audit recent
 ```
 
-Propose (does not actuate):
+`ok: true` on propose means received and recorded, not approved.
+
+Forbidden for Bot (enforced by broker, not just this doc):
 
 ```
-grolctl.exe --json propose light.turn_on light.kitchen
-```
-
-Expect `decision: denied` until a granted light/switch exists and apply is enabled.
-Typical current house: `error: unknown_entity`.
-If haobs is down: `error: haobs_unavailable`. Never invent devices.
-
-Forbidden:
-
-```
+grolctl.exe grant add ...
+grolctl.exe grant revoke ...
+grolctl.exe proposal confirm ...
 grolctl.exe raw-call ...
 grolctl.exe apply ...
-curl.exe http://.../api/services/...
 ```
+
+Those require `--operator-token` matching `GROL_OPERATOR_TOKEN` and header `X-GROL-Actor: operator`.
+Without that, broker returns `operator_required`.
+
+Grants without proven `registry_id` + `platform` are drafts (`authorizing: false`) and do not authorize `pending_confirmation`.
+Confirmation must present the frozen `confirm_digest`. Drift is deny. Apply stays disabled.
