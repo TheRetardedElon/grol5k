@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -31,10 +32,17 @@ func NewObserver(baseURL, envToken, tokenFile string) *Observer {
 			token = strings.TrimSpace(string(b))
 		}
 	}
+	transport := &http.Transport{
+		Proxy:               nil,
+		ForceAttemptHTTP2:   false,
+		DisableKeepAlives:   true,
+		TLSHandshakeTimeout: 10 * time.Second,
+		DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+	}
 	return &Observer{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		client:  &http.Client{Timeout: 5 * time.Second},
+		client:  &http.Client{Timeout: 30 * time.Second, Transport: transport},
 	}
 }
 
@@ -85,7 +93,7 @@ func (o *Observer) Snapshot() map[string]any {
 		return out
 	}
 	req.Header.Set("Authorization", "Bearer "+o.token)
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 
 	resp, err := o.client.Do(req)
 	if err != nil {
