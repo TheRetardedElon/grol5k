@@ -31,6 +31,9 @@ func main() {
 	mux.HandleFunc("GET /api/activity", func(w http.ResponseWriter, r *http.Request) {
 		proxyRead(w, r, *upstream, "/v1/activity")
 	})
+	mux.HandleFunc("GET /api/system", func(w http.ResponseWriter, r *http.Request) {
+		proxyRead(w, r, *upstream, "/v1/system")
+	})
 
 	log.Printf("grol-console listen %s bot %s", *addr, *upstream)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
@@ -53,8 +56,9 @@ func status(w http.ResponseWriter, upstream string) {
 		"ok":      true,
 		"product": "GROL5000",
 		"service": "grol-console",
-		"bot":     map[string]any{"reachable": false},
-		"gateway": map[string]any{"reachable": false},
+		"bot":      map[string]any{"reachable": false},
+		"gateway":  map[string]any{"reachable": false},
+		"observer": map[string]any{"reachable": false},
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(strings.TrimRight(upstream, "/") + "/health")
@@ -64,9 +68,11 @@ func status(w http.ResponseWriter, upstream string) {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&health); err == nil {
 			health["reachable"] = true
 			out["bot"] = health
-			out["gateway"] = health
 			if nested, ok := health["gateway"].(map[string]any); ok {
 				out["gateway"] = nested
+			}
+			if nested, ok := health["observer"].(map[string]any); ok {
+				out["observer"] = nested
 			}
 		}
 	}
