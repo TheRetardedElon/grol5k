@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 )
@@ -51,7 +50,6 @@ func status(w http.ResponseWriter, gw string) {
 		defer resp.Body.Close()
 		var health map[string]any
 		_ = json.NewDecoder(resp.Body).Decode(&health)
-		out["gateway"] = health
 		health["reachable"] = true
 		out["gateway"] = health
 	}
@@ -87,8 +85,4 @@ func proxyChat(w http.ResponseWriter, r *http.Request, gw string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
-}
-
-func init() {
-	_ = os.DevNull
 }
