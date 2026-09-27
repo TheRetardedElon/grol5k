@@ -217,3 +217,103 @@ func TestHealthReportsBotAndGateway(t *testing.T) {
 		t.Fatalf("gateway health %#v", gateway)
 	}
 }
+
+
+func TestObserverSnapshotIsInjectedAsReadOnlyUntrustedContext(t *testing.T) {
+	observer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"service": "grol-healthd",
+				"hostd": map[string]any{"reachable": true},
+			})
+		case "/v1/snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"ok": true,
+				"status": "ok",
+				"mutation_capable": false,
+				"system": map[string]any{
+					"grol_version": "18.4.dev",
+					"pretty_name": "GROL5000 OS",
+				},
+				"network": map[string]any{
+					"connectivity": "online",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer observer.Close()
+
+	var got map[string]any
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode gateway request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "text": "system looks healthy"})
+	}))
+	defer gateway.Close()
+
+	bot := NewBotWithObserver(gateway.URL, observer.URL)
+	rr := httptest.NewRecorder()
+	bot.chat(rr, httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(
+		`{"messages":[{"role":"user","content":"how is the system?"}]}`,
+	)))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	msgs, _ := got["messages"].([]any)
+	if len(msgs) != 3 {
+		t.Fatalf("expected identity + observer context + user, got %#v", got["messages"])
+	}
+
+	contextMsg, _ := msgs[1].(map[string]any)
+	if contextMsg["role"] != "system" {
+		t.Fatalf("observer context role %#v", contextMsg)
+	}
+	contextText, _ := contextMsg["content"].(string)
+	if !strings.Contains(contextText, "untrusted data") ||
+		!strings.Contains(contextText, "18.4.dev") ||
+		!strings.Contains(contextText, "\"mutation_capable\":false") {
+		t.Fatalf("observer context %q", contextText)
+	}
+
+	systemRR := httptest.NewRecorder()
+	bot.systemSnapshot(systemRR, httptest.NewRequest(http.MethodGet, "/v1/system", nil))
+	if systemRR.Code != http.StatusOK {
+		t.Fatalf("system status %d body %s", systemRR.Code, systemRR.Body.String())
+	}
+}
+
+func TestObserverUnavailableDoesNotBreakChat(t *testing.T) {
+	gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "text": "still online"})
+	}))
+	defer gateway.Close()
+
+	bot := NewBotWithObserver(gateway.URL, "http://127.0.0.1:1")
+	rr := httptest.NewRecorder()
+	bot.chat(rr, httptest.NewRequest(http.MethodPost, "/v1/chat", strings.NewReader(
+		`{"messages":[{"role":"user","content":"hello"}]}`,
+	)))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", rr.Code, rr.Body.String())
+	}
+	var reply map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &reply); err != nil {
+		t.Fatal(err)
+	}
+	if reply["text"] != "still online" {
+		t.Fatalf("reply %#v", reply)
+	}
+}

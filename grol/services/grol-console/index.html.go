@@ -40,6 +40,12 @@ button.send:disabled { opacity:.45; cursor:default; }
 .card { max-width:800px; padding:24px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
 .card h2 { margin-top:0; }
 .card p { color:var(--mute); }
+.status-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; margin-top:18px; }
+.status-card { border:1px solid var(--line); border-radius:10px; background:#101419; padding:16px; min-width:0; }
+.status-card h3 { margin:0 0 12px; font-size:14px; }
+.kv { display:grid; grid-template-columns:minmax(90px,auto) 1fr; gap:6px 12px; font-size:13px; }
+.kv .k { color:var(--mute); }
+.kv .v { overflow-wrap:anywhere; }
 @media (max-width:720px) {
   .app { grid-template-columns:72px 1fr; }
   .brand { font-size:11px; overflow:hidden; }
@@ -60,7 +66,7 @@ button.send:disabled { opacity:.45; cursor:default; }
   <button class="item" data-view="activity">≡ <span>Activity</span></button>
   <button class="item" data-view="build">◆ <span>Build</span></button>
   <button class="item" data-view="settings">⚙ <span>Settings</span></button>
-  <div class="navfoot">M3B · resident bot · no mutations</div>
+  <div class="navfoot">M3C-A · read-only system awareness</div>
 </nav>
 <main>
   <header>
@@ -69,7 +75,7 @@ button.send:disabled { opacity:.45; cursor:default; }
   </header>
 
   <section id="botView">
-    <p class="note">Grok Bot owns the local session and context, then talks to grol-ai-gateway. No Home Assistant, host, Docker, broker, or Build mutation path exists in M3B.</p>
+    <p class="note">Grok Bot has read-only GROL system awareness through grol-healthd. It still has no Home Assistant, host mutation, Docker, broker, or Build authority.</p>
     <div id="messages"></div>
     <form class="composer" id="chatForm">
       <input id="q" autocomplete="off" placeholder="Talk to Grok Bot"/>
@@ -81,6 +87,7 @@ button.send:disabled { opacity:.45; cursor:default; }
     <div class="card">
       <h2 id="placeholderTitle"></h2>
       <p id="placeholderText"></p>
+      <div id="systemGrid" class="status-grid"></div>
     </div>
   </section>
 </main>
@@ -95,13 +102,16 @@ const send = document.getElementById('send');
 const botView = document.getElementById('botView');
 const placeholder = document.getElementById('placeholder');
 const viewTitle = document.getElementById('viewTitle');
+const placeholderTitle = document.getElementById('placeholderTitle');
+const placeholderText = document.getElementById('placeholderText');
+const systemGrid = document.getElementById('systemGrid');
 let sessionId = localStorage.getItem('grol.bot.session_id') || '';
 
 const labels = {
   bot:['Grok Bot',''],
   overview:['Overview','Live GROL health and summaries land here in M3C.'],
   devices:['Devices','Read-only Home Assistant entity/device inventory lands here in M3C.'],
-  system:['System','Host, OS, Supervisor, Core, gateway, and broker health land here in M3C.'],
+  system:['System','Live read-only GROL host state.'],
   activity:['Activity','Grok Bot proposals, approvals, and system events land here.'],
   build:['Build','Grok Build remains isolated and unavailable in M3B.'],
   settings:['Settings','Provisioning and operator preferences land here without exposing secrets to the model.']
@@ -128,13 +138,18 @@ async function refresh() {
     const s = await response.json();
     const b = s.bot || {};
     const g = s.gateway || {};
+    const o = s.observer || {};
     const botOK = b.reachable === true && b.ok === true;
     const gatewayOK = g.reachable === true && g.ok === true;
-    dot.style.background = botOK && gatewayOK ? (g.provisioned ? 'var(--good)' : 'var(--warn)') : 'var(--acc)';
+    const observerOK = o.reachable === true && o.ok === true;
+    const hostdOK = observerOK && o.hostd && o.hostd.reachable === true;
+    if (!botOK || !gatewayOK) dot.style.background = 'var(--acc)';
+    else if (!g.provisioned || !hostdOK) dot.style.background = 'var(--warn)';
+    else dot.style.background = 'var(--good)';
     if (!botOK) state.textContent = 'grol-bot unreachable';
     else if (!gatewayOK) state.textContent = 'bot online · gateway unreachable';
     else if (!g.provisioned) state.textContent = 'bot online · gateway online · Grok not provisioned';
-    else state.textContent = 'bot online · ' + (g.model || 'Grok') + ' · streaming';
+    else state.textContent = 'bot + ' + (g.model || 'Grok') + (hostdOK ? ' · system aware' : ' · observer degraded');
   } catch (_) {
     dot.style.background = 'var(--acc)';
     state.textContent = 'console error';
@@ -243,6 +258,91 @@ document.getElementById('chatForm').addEventListener('submit', async (e) => {
   await streamChat(text);
 });
 
+function formatBytes(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'unavailable';
+  const units = ['B','KiB','MiB','GiB','TiB'];
+  let n = value;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n.toFixed(0) : n.toFixed(1)) + ' ' + units[i];
+}
+
+function statusCard(title, rows) {
+  const card = document.createElement('div');
+  card.className = 'status-card';
+  const heading = document.createElement('h3');
+  heading.textContent = title;
+  const kv = document.createElement('div');
+  kv.className = 'kv';
+  for (const [key, value] of rows) {
+    const k = document.createElement('div');
+    k.className = 'k';
+    k.textContent = key;
+    const v = document.createElement('div');
+    v.className = 'v';
+    v.textContent = value == null || value === '' ? 'unavailable' : String(value);
+    kv.append(k, v);
+  }
+  card.append(heading, kv);
+  return card;
+}
+
+async function renderSystem() {
+  placeholderText.textContent = 'Loading read-only host state…';
+  systemGrid.replaceChildren();
+  try {
+    const response = await fetch('/api/system', {cache:'no-store'});
+    const body = await response.json();
+    if (!response.ok || body.ok !== true || !body.snapshot) {
+      throw new Error(body.error || 'observer unavailable');
+    }
+
+    const s = body.snapshot;
+    const system = s.system || {};
+    const network = s.network || {};
+    const hardware = s.hardware || {};
+    const update = s.update || {};
+    const services = s.services || {};
+    placeholderText.textContent = s.status === 'ok'
+      ? 'Live read-only state from grol-healthd → grol-hostd.'
+      : 'Observer is degraded; showing the state that is available.';
+
+    systemGrid.append(
+      statusCard('OS', [
+        ['Name', system.pretty_name || system.os_name],
+        ['Version', system.grol_version],
+        ['Board', system.board],
+        ['Channel', system.channel],
+        ['Uptime', system.uptime_seconds != null ? system.uptime_seconds + ' s' : null]
+      ]),
+      statusCard('Network', [
+        ['Connectivity', network.connectivity],
+        ['Interface', network.primary_interface],
+        ['IPv4', network.ipv4],
+        ['DNS', network.dns]
+      ]),
+      statusCard('Hardware', [
+        ['Architecture', hardware.cpu_arch],
+        ['Memory total', formatBytes(hardware.memory_total_bytes)],
+        ['Memory available', formatBytes(hardware.memory_available_bytes)],
+        ['Memory pressure', hardware.memory_pressure]
+      ]),
+      statusCard('Update', [
+        ['OS version', update.os_version],
+        ['Active slot', update.active_slot],
+        ['RAUC', update.rauc],
+        ['Rollback', update.rollback_available]
+      ])
+    );
+
+    const components = services.components || {};
+    const serviceRows = Object.keys(components).sort().map(name => [name, components[name]]);
+    if (serviceRows.length) systemGrid.append(statusCard('Services', serviceRows));
+  } catch (err) {
+    placeholderText.textContent = 'System observer unavailable: ' + err.message;
+  }
+}
+
 document.querySelectorAll('button.item').forEach((button) => {
   button.addEventListener('click', () => {
     document.querySelectorAll('button.item').forEach(b => b.classList.remove('active'));
@@ -257,8 +357,10 @@ document.querySelectorAll('button.item').forEach((button) => {
     }
     botView.style.display = 'none';
     placeholder.style.display = 'block';
-    document.getElementById('placeholderTitle').textContent = title;
-    document.getElementById('placeholderText').textContent = desc;
+    placeholderTitle.textContent = title;
+    placeholderText.textContent = desc;
+    systemGrid.replaceChildren();
+    if (id === 'system') renderSystem();
   });
 });
 

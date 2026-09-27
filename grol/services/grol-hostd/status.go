@@ -29,7 +29,7 @@ var serviceUnits = map[string]string{
 	"docker":             "docker.service",
 	"networkmanager":     "NetworkManager.service",
 	"rauc":               "rauc.service",
-	"supervisor":         "hassio-supervisor.service",
+	"supervisor":         "haos-supervisor.service",
 	"os-agent":           "haos-agent.service",
 }
 
