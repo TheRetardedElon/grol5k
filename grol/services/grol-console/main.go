@@ -34,6 +34,9 @@ func main() {
 	mux.HandleFunc("GET /api/system", func(w http.ResponseWriter, r *http.Request) {
 		proxyRead(w, r, *upstream, "/v1/system")
 	})
+	mux.HandleFunc("GET /api/devices", func(w http.ResponseWriter, r *http.Request) {
+		proxyRead(w, r, *upstream, "/v1/devices")
+	})
 
 	log.Printf("grol-console listen %s bot %s", *addr, *upstream)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
