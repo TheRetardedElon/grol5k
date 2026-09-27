@@ -142,11 +142,14 @@ async function refresh() {
     const botOK = b.reachable === true && b.ok === true;
     const gatewayOK = g.reachable === true && g.ok === true;
     const observerOK = o.reachable === true && o.ok === true;
-    dot.style.background = botOK && gatewayOK ? (g.provisioned ? 'var(--good)' : 'var(--warn)') : 'var(--acc)';
+    const hostdOK = observerOK && o.hostd && o.hostd.reachable === true;
+    if (!botOK || !gatewayOK) dot.style.background = 'var(--acc)';
+    else if (!g.provisioned || !hostdOK) dot.style.background = 'var(--warn)';
+    else dot.style.background = 'var(--good)';
     if (!botOK) state.textContent = 'grol-bot unreachable';
     else if (!gatewayOK) state.textContent = 'bot online · gateway unreachable';
     else if (!g.provisioned) state.textContent = 'bot online · gateway online · Grok not provisioned';
-    else state.textContent = 'bot + ' + (g.model || 'Grok') + (observerOK ? ' · system aware' : ' · observer offline');
+    else state.textContent = 'bot + ' + (g.model || 'Grok') + (hostdOK ? ' · system aware' : ' · observer degraded');
   } catch (_) {
     dot.style.background = 'var(--acc)';
     state.textContent = 'console error';
