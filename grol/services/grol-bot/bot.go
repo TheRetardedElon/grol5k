@@ -18,6 +18,7 @@ const (
 type Bot struct {
 	gateway        string
 	observer       string
+	haObserver     string
 	store          *Store
 	client         *http.Client
 	observerClient *http.Client
@@ -43,22 +44,22 @@ func (b *Bot) ListenAndServe(addr string) error {
 	mux.HandleFunc("GET /v1/sessions", b.listSessions)
 	mux.HandleFunc("GET /v1/activity", b.activity)
 	mux.HandleFunc("GET /v1/system", b.systemSnapshot)
+	mux.HandleFunc("GET /v1/devices", b.devices)
 	mux.HandleFunc("POST /v1/chat", b.chat)
 	return http.ListenAndServe(addr, mux)
 }
 
 func (b *Bot) health(w http.ResponseWriter, _ *http.Request) {
-	gw := b.gatewayHealth()
-	observer := b.observerHealth()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":        true,
-		"service":   "grol-bot",
-		"identity":  "grol-bot",
-		"product":   "GROL5000",
-		"sessions":  b.store.SessionCount(),
-		"gateway":   gw,
-		"observer":  observer,
-		"proposals": []any{},
+		"ok":          true,
+		"service":     "grol-bot",
+		"identity":    "grol-bot",
+		"product":     "GROL5000",
+		"sessions":    b.store.SessionCount(),
+		"gateway":     b.gatewayHealth(),
+		"observer":    b.observerHealth(),
+		"ha_observer": b.haHealth(),
+		"proposals":   []any{},
 	})
 }
 
@@ -69,7 +70,6 @@ func (b *Bot) gatewayHealth() map[string]any {
 		return out
 	}
 	defer resp.Body.Close()
-
 	var health map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&health); err == nil {
 		health["reachable"] = true
@@ -88,7 +88,6 @@ func (b *Bot) observerHealth() map[string]any {
 		return out
 	}
 	defer resp.Body.Close()
-
 	var health map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&health); err == nil {
 		health["reachable"] = true
@@ -109,7 +108,6 @@ func (b *Bot) observerSnapshot() map[string]any {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil
 	}
-
 	var snapshot map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 512*1024)).Decode(&snapshot); err != nil {
 		return nil
@@ -186,6 +184,14 @@ func (b *Bot) chat(w http.ResponseWriter, r *http.Request) {
 			outgoing = append(outgoing, Message{
 				Role:    "system",
 				Content: contextPrompt + "\n" + string(raw),
+			})
+		}
+	}
+	if snapshot := b.haSnapshot(); snapshot != nil {
+		if raw, err := json.Marshal(snapshot); err == nil {
+			outgoing = append(outgoing, Message{
+				Role:    "system",
+				Content: devicesPrompt + "\n" + string(raw),
 			})
 		}
 	}
