@@ -16,6 +16,7 @@ func main() {
 	obsURL := flag.String("observer", "http://127.0.0.1:8787", "grol-healthd base URL")
 	botURL := flag.String("bot", "http://127.0.0.1:8788", "grol-bot base URL")
 	brkURL := flag.String("broker", "http://127.0.0.1:8785", "grol-action-broker base URL")
+	opTok := flag.String("operator-token", "", "operator token for grant/confirm (never used by Bot)")
 	flag.Parse()
 
 	args := flag.Args()
@@ -25,6 +26,7 @@ func main() {
 	}
 
 	cli := NewClientWithBroker(*haURL, *obsURL, *botURL, *brkURL)
+	cli.OperatorToken = *opTok
 	out, code := run(cli, args)
 	if *jsonOut {
 		enc := json.NewEncoder(os.Stdout)
