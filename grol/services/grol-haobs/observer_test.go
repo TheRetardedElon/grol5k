@@ -28,6 +28,9 @@ func TestSnapshotIsGetOnlyAndSanitized(t *testing.T) {
 	defer ha.Close()
 
 	o := NewObserver(ha.URL, "secret-token", "/no/such")
+	o.lookupRegistry = func() (map[string]RegistryEntry, error) {
+		return map[string]RegistryEntry{}, nil
+	}
 	snap := o.Snapshot()
 	if snap["mutation_capable"] != false || snap["untrusted"] != true {
 		t.Fatalf("flags %#v", snap)
@@ -41,6 +44,9 @@ func TestSnapshotIsGetOnlyAndSanitized(t *testing.T) {
 	}
 	if len(methods) != 1 || methods[0] != "GET /api/states" {
 		t.Fatalf("HA calls %#v", methods)
+	}
+	if devices[0]["identity_proven"] != false {
+		t.Fatalf("empty registry must not prove identity %#v", devices[0])
 	}
 }
 
