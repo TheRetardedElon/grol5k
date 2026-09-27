@@ -15,6 +15,7 @@ const maxEntities = 200
 var allowDomains = map[string]struct{}{
 	"light": {}, "switch": {}, "climate": {}, "media_player": {},
 	"lock": {}, "binary_sensor": {}, "sensor": {}, "cover": {},
+	"weather": {},
 }
 
 type Observer struct {
@@ -48,11 +49,11 @@ func (o *Observer) ListenAndServe(addr string) error {
 
 func (o *Observer) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":                true,
-		"service":           "grol-haobs",
-		"mode":              "read-only",
-		"provisioned":       o.Provisioned(),
-		"mutation_capable":  false,
+		"ok":               true,
+		"service":          "grol-haobs",
+		"mode":             "read-only",
+		"provisioned":      o.Provisioned(),
+		"mutation_capable": false,
 	})
 }
 
