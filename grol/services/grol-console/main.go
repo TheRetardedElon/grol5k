@@ -25,6 +25,12 @@ func main() {
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		proxyChat(w, r, *upstream)
 	})
+	mux.HandleFunc("GET /api/sessions", func(w http.ResponseWriter, r *http.Request) {
+		proxyRead(w, r, *upstream, "/v1/sessions")
+	})
+	mux.HandleFunc("GET /api/activity", func(w http.ResponseWriter, r *http.Request) {
+		proxyRead(w, r, *upstream, "/v1/activity")
+	})
 
 	log.Printf("grol-console listen %s bot %s", *addr, *upstream)
 	if err := http.ListenAndServe(*addr, mux); err != nil {
@@ -67,6 +73,41 @@ func status(w http.ResponseWriter, upstream string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(out)
+}
+
+func proxyRead(w http.ResponseWriter, r *http.Request, upstream, path string) {
+	req, err := http.NewRequestWithContext(
+		r.Context(),
+		http.MethodGet,
+		strings.TrimRight(upstream, "/")+path,
+		nil,
+	)
+	if err != nil {
+		http.Error(w, "bad bot", http.StatusBadGateway)
+		return
+	}
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":    false,
+			"error": "bot_unreachable",
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, io.LimitReader(resp.Body, 2*1024*1024))
 }
 
 func proxyChat(w http.ResponseWriter, r *http.Request, upstream string) {
