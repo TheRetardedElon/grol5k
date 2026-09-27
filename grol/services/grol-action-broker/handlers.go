@@ -1,13 +1,10 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
 	"time"
 )
 
@@ -137,9 +134,7 @@ func (b *Broker) confirm(w http.ResponseWriter, r *http.Request) {
 	}
 	p = b.refreshLocked(p)
 	if p.State != "pending_confirmation" {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"ok": false, "error": "not_confirmable", "proposal": p,
-		})
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "not_confirmable", "proposal": p})
 		return
 	}
 	var req struct {
@@ -150,9 +145,7 @@ func (b *Broker) confirm(w http.ResponseWriter, r *http.Request) {
 		req.Digest = hdr
 	}
 	if p.ConfirmDigest == "" || req.Digest == "" || req.Digest != p.ConfirmDigest {
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"ok": false, "error": "confirm_digest_mismatch", "proposal": p,
-		})
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": "confirm_digest_mismatch", "proposal": p})
 		return
 	}
 	p.State = "confirmed"
@@ -162,7 +155,5 @@ func (b *Broker) confirm(w http.ResponseWriter, r *http.Request) {
 	p.MutationCapable = false
 	b.items[id] = p
 	b.recordLocked("proposal_confirmed", p, "human confirmation; apply still disabled")
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "proposal": p, "mutation_capable": false, "apply_enabled": false,
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proposal": p, "mutation_capable": false, "apply_enabled": false})
 }
