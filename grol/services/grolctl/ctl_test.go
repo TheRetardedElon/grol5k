@@ -7,49 +7,61 @@ import (
 	"testing"
 )
 
-func TestMutationVerbsRefused(t *testing.T) {
+func TestRawCallStillForbidden(t *testing.T) {
 	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
-	for _, args := range [][]string{
-		{"propose", "light.turn_on", "kitchen"},
-		{"raw-call"},
-		{"turn_on"},
-	} {
+	for _, args := range [][]string{{"raw-call"}, {"turn_on"}, {"apply"}} {
 		out, code := run(cli, args)
-		if code != 3 {
-			t.Fatalf("%v code=%d", args, code)
+		if code != 3 || out["error"] != "mutation_disabled" {
+			t.Fatalf("%v code=%d out=%v", args, code, out["error"])
 		}
-		if out["error"] != "mutation_disabled" {
-			t.Fatalf("%v error=%v", args, out["error"])
-		}
-		if out["mutation_capable"] != false {
-			t.Fatalf("mutation must stay false")
-		}
-	}
-}
-
-func TestUnknownVerb(t *testing.T) {
-	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
-	out, code := run(cli, []string{"shell"})
-	if code != 2 || out["error"] != "unknown_verb" {
-		t.Fatalf("got code=%d err=%v", code, out["error"])
 	}
 }
 
 func TestReadFailuresExitNonZero(t *testing.T) {
 	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
 	for _, args := range [][]string{
-		{"devices", "list"},
-		{"system", "status"},
-		{"activity", "recent"},
-		{"device", "get", "weather.forecast_home"},
+		{"devices", "list"}, {"system", "status"}, {"activity", "recent"}, {"device", "get", "weather.forecast_home"},
 	} {
 		out, code := run(cli, args)
-		if code != readFailureExit {
-			t.Fatalf("%v code=%d out=%#v", args, code, out)
+		if code != readFailureExit || out["ok"] != false {
+			t.Fatalf("%v code=%d %#v", args, code, out)
 		}
-		if out["ok"] != false {
-			t.Fatalf("%v should be ok=false: %#v", args, out)
+	}
+}
+
+func TestStatusSeparatesProcessFromLiveHouse(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/v1/snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "status": "ha_unreachable"})
+		default:
+			http.NotFound(w, r)
 		}
+	}))
+	defer hs.Close()
+	cli := NewClient(hs.URL, "http://127.0.0.1:9", "http://127.0.0.1:9")
+	out, code := run(cli, []string{"status"})
+	if code != 0 || out["haobs"] != true || out["house_reachable"] != false || out["status"] != "degraded" {
+		t.Fatalf("%#v", out)
+	}
+}
+
+func TestSystemPropagatesDegradedSnapshot(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": false, "status": "degraded", "errors": map[string]any{"network": "unreachable"},
+		})
+	}))
+	defer hs.Close()
+	cli := NewClient("http://127.0.0.1:9", hs.URL, "http://127.0.0.1:9")
+	out, code := run(cli, []string{"system", "status"})
+	if code != readFailureExit {
+		t.Fatalf("expected failed read exit, got %d %#v", code, out)
+	}
+	if out["ok"] != false || out["status"] != "degraded" {
+		t.Fatalf("degraded snapshot must propagate: %#v", out)
 	}
 }
 
@@ -60,20 +72,13 @@ func TestDevicesJSONFromHaobs(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":               true,
-			"mutation_capable": false,
-			"untrusted":        true,
-			"count":            1,
+			"ok": true, "mutation_capable": false, "untrusted": true, "count": 1,
 			"devices": []map[string]any{{
-				"entity_id": "weather.forecast_home",
-				"domain":    "weather",
-				"state":     "partlycloudy",
-				"name":      "Forecast Home",
+				"entity_id": "weather.forecast_home", "domain": "weather", "state": "partlycloudy", "name": "Forecast Home",
 			}},
 		})
 	}))
 	defer hs.Close()
-
 	cli := NewClient(hs.URL, "http://127.0.0.1:9", "http://127.0.0.1:9")
 	out, code := run(cli, []string{"devices", "list"})
 	if code != 0 || out["ok"] != true {
@@ -85,54 +90,28 @@ func TestDevicesJSONFromHaobs(t *testing.T) {
 	}
 }
 
-func TestStatusSeparatesProcessFromLiveHouse(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/health":
-			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
-		case "/v1/snapshot":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"ok":     false,
-				"status": "ha_unreachable",
-			})
-		default:
-			http.NotFound(w, r)
-		}
+func TestProposeHitsBroker(t *testing.T) {
+	brk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"proposal": map[string]any{
+				"id": "abc", "service": "light.turn_on", "entity_id": "light.kitchen",
+				"decision": "denied", "error": "unknown_entity",
+			},
+		})
 	}))
-	defer hs.Close()
-
-	cli := NewClient(hs.URL, "http://127.0.0.1:9", "http://127.0.0.1:9")
-	out, code := run(cli, []string{"status"})
-	if code != 0 || out["ok"] != true {
-		t.Fatalf("status command itself should succeed: code=%d %#v", code, out)
-	}
-	if out["haobs"] != true {
-		t.Fatalf("haobs process should be reachable: %#v", out)
-	}
-	if out["house_reachable"] != false {
-		t.Fatalf("house must be reported unreachable: %#v", out)
-	}
-	if out["status"] != "degraded" {
-		t.Fatalf("expected degraded stack: %#v", out)
+	defer brk.Close()
+	cli := NewClientWithBroker("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9", brk.URL)
+	out, code := run(cli, []string{"propose", "light.turn_on", "light.kitchen"})
+	if code != 0 || out["proposal"].(map[string]any)["error"] != "unknown_entity" {
+		t.Fatalf("%d %#v", code, out)
 	}
 }
 
-func TestSystemPropagatesDegradedSnapshot(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":     false,
-			"status": "degraded",
-			"errors": map[string]any{"network": "unreachable"},
-		})
-	}))
-	defer hs.Close()
-
-	cli := NewClient("http://127.0.0.1:9", hs.URL, "http://127.0.0.1:9")
-	out, code := run(cli, []string{"system", "status"})
-	if code != readFailureExit {
-		t.Fatalf("expected failed read exit, got %d %#v", code, out)
-	}
-	if out["ok"] != false || out["status"] != "degraded" {
-		t.Fatalf("degraded snapshot must propagate: %#v", out)
+func TestUnknownVerb(t *testing.T) {
+	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
+	out, code := run(cli, []string{"shell"})
+	if code != 2 || out["error"] != "unknown_verb" {
+		t.Fatal(code, out["error"])
 	}
 }

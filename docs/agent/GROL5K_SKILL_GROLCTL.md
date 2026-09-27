@@ -1,6 +1,8 @@
 # GROL5K skill: grolctl
 
-Approved local commands (M3D).
+Approved local commands.
+
+Reads:
 
 ```
 grolctl.exe --json status
@@ -11,22 +13,20 @@ grolctl.exe --json device get <entity_id>
 grolctl.exe --json activity recent
 ```
 
-Optional flags when loopback observers are not the default:
+Propose (does not actuate):
 
 ```
---ha-observer http://127.0.0.1:8786
---observer    http://127.0.0.1:8787
---bot         http://127.0.0.1:8788
+grolctl.exe --json propose light.turn_on light.kitchen
 ```
 
-Refused until M4:
+Expect `decision: denied` until a granted light/switch exists and apply is enabled.
+Typical current house: `error: unknown_entity`.
+If haobs is down: `error: haobs_unavailable`. Never invent devices.
+
+Forbidden:
 
 ```
-grolctl.exe propose ...
 grolctl.exe raw-call ...
-grolctl.exe turn_on ...
+grolctl.exe apply ...
+curl.exe http://.../api/services/...
 ```
-
-Expect `error: mutation_disabled` and exit code 3.
-
-Normative spec: `grol/specs/GROLCTL_V0.md`. Architecture: ADR-0007.
