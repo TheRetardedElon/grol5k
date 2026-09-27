@@ -1,47 +1,62 @@
-# ADR-0006: Grok Bot operator surface
+# ADR-0006: GROL operator surface and Grok Bot
 
 Status: accepted
 Date: 2026-09-26
 
 ## Decision
 
-Grok Bot is commanded from a **web operator surface**, not from a Linux desktop environment on the appliance.
+The GROL web operator surface is the **primary human interface** to GROL5000.
+Grok Bot is a **first-class resident component** of that interface, not a chat
+box bolted onto Home Assistant.
 
 Rejected for the appliance image:
 
 - XFCE, KDE Plasma, GNOME, or any X11/Wayland session
 - nested "web desktop" (noVNC to a full DE)
-- putting Grok Bot inside the Linux kernel or initrd
+- Grok / Grok Bot in the kernel, initrd, or with Docker/hostd credentials
 
-Accepted:
+Long-term the user only needs:
 
 ```
-Browser
-  │
-  ├─ http://<host>:8123     inherited HA / later GROL frontend
-  └─ http://<host>:8790     grol-bot console (M3/M4)
-         │
-         ▼
-      grol-bot
-         │
-         ▼
-   grol-ai-gateway  →  xAI / Grok
-         │
-         ▼
-  grol-action-broker → HA services / grol-hostd / later grol-buildd
+http://grol5000.local
 ```
 
-`:8790` is a GROL-owned HTTP/WebSocket console on the appliance LAN.
-It is not the Supervisor API and not the Home Assistant frontend.
-Later `grol-frontend` embeds this console as a first-class sidebar, then replaces HA chrome.
+They should not have to know about 8123, 8790, Supervisor, Core, hostd,
+gateway, or broker.
 
-## Why not a desktop
+Until M5 owns `:8123` via `grol-frontend` → `grol-core` → `grol-supervisor`,
+the operator surface lives on `:8790`.
 
-GROL5000 is a headless appliance (UEFI → Linux → Docker → Supervisor → Core).
-A DE would add hundreds of megabytes, a local attack surface, and a second product
-that is not how users already reach this box (`grol5000.local`).
+```
+                  GROL5000
+                     │
+         ┌───────────┴───────────┐
+         │                       │
+    GROL Frontend            Grok Bot
+         │                       │
+         ├─── Devices            ├── Grok (intelligence)
+         ├─── Automations        ├── context / sessions
+         ├─── System             ├── proposals
+         ├─── Build              └── tool requests
+         │                       │
+         └──────────┬────────────┘
+                    ▼
+            Capability Broker
+              │            │
+              ▼            ▼
+          GROL Core     grol-hostd
+```
 
-The operator already has a browser. That is the desktop.
+M3 split:
+
+- M3A `grol-ai-gateway` — xAI auth, streaming, tool-call normalize, health.
+  Grok does not get root, Docker socket, or hostd.
+- M3B `grol-bot` — persistent local agent (sessions, context, proposals).
+- M3C operator console on `:8790` — Overview / Grok Bot / System / Devices / Activity.
+  Read-only except chat. No house mutations.
+
+M4 is the broker. M5 is `:8123` becoming GROL.
+`Hey Grok` is another transport into the same bot runtime, not a second assistant.
 
 ## Live proof (Build #18 box)
 
@@ -51,12 +66,4 @@ Fetching update data from https://version.home-assistant.io/dev.json
 Updating image …landingpage to …qemux86-64-homeassistant:2026.10.0.dev…
 ```
 
-Hostname and console are GROL. Core, Supervisor, and onboarding are still upstream HA.
-That is expected until M5 registry/index cutover.
-
-## Consequences
-
-- M3 ships `grol-ai-gateway` + a stub `grol-bot` HTTP console. No house mutations.
-- M4 wires the broker so the console can request `light.*` / `switch.*` through policy.
-- M5/M6 replace HA onboarding chrome via `grol-frontend` built into `grol-core`.
-- Voice (`Hey Grok`) stays after M5. Push-to-talk can land in the console earlier.
+Hostname is GROL. Product chrome is still upstream HA until M5.
