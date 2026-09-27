@@ -38,17 +38,32 @@ func NewStore() *Store {
 func (s *Store) GetOrCreate(id string) *Session {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if id != "" {
 		if sess, ok := s.sessions[id]; ok {
 			return sess
 		}
 	}
-	if id == "" {
-		id = newID()
-	}
+
+	// Unknown client-provided IDs are not authoritative. Only IDs issued by
+	// this bot may resume an existing session.
+	id = newID()
 	sess := &Session{ID: id, Updated: time.Now().UTC()}
 	s.sessions[id] = sess
 	return sess
+}
+
+func (s *Store) Messages(id string) []Message {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess := s.sessions[id]
+	if sess == nil {
+		return nil
+	}
+	out := make([]Message, len(sess.Messages))
+	copy(out, sess.Messages)
+	return out
 }
 
 func (s *Store) Append(id string, msg Message) {
