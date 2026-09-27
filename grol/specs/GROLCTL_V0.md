@@ -47,7 +47,7 @@ Normative with ADR-0007.
 - 0: `ok: true` (status stays 0 even when `status: degraded`)
 - 2: unknown/invalid verb
 - 3: `mutation_disabled`
-- 4: supported read/propose completed with `ok: false`
+- 4: supported command completed with `ok: false` (including reads, propose, and operator broker commands)
 
 ## Propose
 
