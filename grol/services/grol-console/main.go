@@ -61,7 +61,8 @@ func status(w http.ResponseWriter, upstream string) {
 		"service": "grol-console",
 		"bot":      map[string]any{"reachable": false},
 		"gateway":  map[string]any{"reachable": false},
-		"observer": map[string]any{"reachable": false},
+		"observer":    map[string]any{"reachable": false},
+		"ha_observer": map[string]any{"reachable": false},
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(strings.TrimRight(upstream, "/") + "/health")
@@ -76,6 +77,9 @@ func status(w http.ResponseWriter, upstream string) {
 			}
 			if nested, ok := health["observer"].(map[string]any); ok {
 				out["observer"] = nested
+			}
+			if nested, ok := health["ha_observer"].(map[string]any); ok {
+				out["ha_observer"] = nested
 			}
 		}
 	}
