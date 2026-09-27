@@ -13,7 +13,7 @@ import (
 const consoleMaxBody = 64 * 1024
 
 func main() {
-	addr := flag.String("addr", "0.0.0.0:8790", "listen address")
+	addr := flag.String("addr", "127.0.0.1:8790", "listen address (loopback by default; explicitly bind LAN only for development)")
 	upstream := flag.String("bot", "http://127.0.0.1:8788", "grol-bot base URL")
 	flag.Parse()
 
