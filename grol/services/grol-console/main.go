@@ -14,7 +14,6 @@ const consoleMaxBody = 64 * 1024
 
 func main() {
 	addr := flag.String("addr", "0.0.0.0:8790", "listen address")
-	// M3B: console talks to the resident bot, not the provider gateway.
 	upstream := flag.String("bot", "http://127.0.0.1:8788", "grol-bot base URL")
 	flag.Parse()
 
@@ -49,6 +48,7 @@ func status(w http.ResponseWriter, upstream string) {
 		"product": "GROL5000",
 		"service": "grol-console",
 		"bot":     map[string]any{"reachable": false},
+		"gateway": map[string]any{"reachable": false},
 	}
 	client := &http.Client{Timeout: 2 * time.Second}
 	resp, err := client.Get(strings.TrimRight(upstream, "/") + "/health")
@@ -58,7 +58,10 @@ func status(w http.ResponseWriter, upstream string) {
 		if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&health); err == nil {
 			health["reachable"] = true
 			out["bot"] = health
-			out["gateway"] = health["gateway"]
+			out["gateway"] = health
+			if nested, ok := health["gateway"].(map[string]any); ok {
+				out["gateway"] = nested
+			}
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
