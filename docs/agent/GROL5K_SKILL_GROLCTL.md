@@ -1,8 +1,6 @@
 # GROL5K skill: grolctl
 
-Approved local commands.
-
-Reads:
+Reads stay approved.
 
 ```
 grolctl.exe --json status
@@ -13,20 +11,26 @@ grolctl.exe --json device get <entity_id>
 grolctl.exe --json activity recent
 ```
 
-Propose (does not actuate):
+Propose / inspect (Bot-approved):
 
 ```
 grolctl.exe --json propose light.turn_on light.kitchen
+grolctl.exe --json proposal get <id>
+grolctl.exe --json grants list
+grolctl.exe --json audit recent
 ```
 
-Expect `decision: denied` until a granted light/switch exists and apply is enabled.
-Typical current house: `error: unknown_entity`.
-If haobs is down: `error: haobs_unavailable`. Never invent devices.
+States: `denied` `not_granted` `pending_confirmation` `confirmed` `expired`.
+`ok: true` on propose means the request was *received and recorded*, not approved.
+Decision/state are the policy result. Never say a proposal was "accepted" unless `decision` is `confirmed`.
 
-Forbidden:
+Operator-only (do not invent these as Bot self-service):
 
 ```
-grolctl.exe raw-call ...
-grolctl.exe apply ...
-curl.exe http://.../api/services/...
+grolctl.exe --json grant add light.kitchen light.turn_on
+grolctl.exe --json proposal confirm <id>
 ```
+
+Confirm does not actuate. `apply_enabled` stays false. No HA_TOKEN.
+
+Forbidden: raw-call, apply, curl to HA.

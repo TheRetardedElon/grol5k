@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,7 +9,7 @@ import (
 
 func (c *Client) post(path string, body any) map[string]any {
 	raw, _ := json.Marshal(body)
-	resp, err := c.hc.Post(c.broker+path, "application/json", bytesReader(raw))
+	resp, err := c.hc.Post(c.broker+path, "application/json", bytes.NewReader(raw))
 	if err != nil {
 		return map[string]any{"ok": false, "error": "broker_unavailable", "mutation_capable": false, "untrusted": true}
 	}
@@ -22,23 +23,6 @@ func (c *Client) post(path string, body any) map[string]any {
 	out["untrusted"] = true
 	return out
 }
-
-func bytesReader(raw []byte) *readCloserBuf { return &readCloserBuf{b: raw} }
-
-type readCloserBuf struct {
-	b []byte
-	n int
-}
-
-func (r *readCloserBuf) Read(p []byte) (int, error) {
-	if r.n >= len(r.b) {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b[r.n:])
-	r.n += n
-	return n, nil
-}
-func (r *readCloserBuf) Close() error { return nil }
 
 func (c *Client) Grants() map[string]any {
 	out, err := c.get(c.broker + "/v1/grants")
