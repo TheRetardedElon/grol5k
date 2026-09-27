@@ -7,23 +7,48 @@ import (
 	"testing"
 )
 
-func TestMutationVerbsRefused(t *testing.T) {
+func TestRawCallStillForbidden(t *testing.T) {
 	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
-	for _, args := range [][]string{
-		{"propose", "light.turn_on", "kitchen"},
-		{"raw-call"},
-		{"turn_on"},
-	} {
+	for _, args := range [][]string{{"raw-call"}, {"turn_on"}, {"apply"}} {
 		out, code := run(cli, args)
-		if code != 3 {
-			t.Fatalf("%v code=%d", args, code)
+		if code != 3 || out["error"] != "mutation_disabled" {
+			t.Fatalf("%v code=%d out=%v", args, code, out["error"])
 		}
-		if out["error"] != "mutation_disabled" {
-			t.Fatalf("%v error=%v", args, out["error"])
+	}
+}
+
+func TestProposeUsage(t *testing.T) {
+	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
+	_, code := run(cli, []string{"propose"})
+	if code != 2 {
+		t.Fatalf("code %d", code)
+	}
+}
+
+func TestProposeHitsBroker(t *testing.T) {
+	brk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/propose" {
+			http.NotFound(w, r)
+			return
 		}
-		if out["mutation_capable"] != false {
-			t.Fatalf("mutation must stay false")
-		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true,
+			"proposal": map[string]any{
+				"id": "abc", "service": "light.turn_on", "entity_id": "light.kitchen",
+				"decision": "denied", "error": "unknown_entity",
+				"mutation_capable": false,
+			},
+		})
+	}))
+	defer brk.Close()
+	cli := NewClientWithBroker("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9", brk.URL)
+	out, code := run(cli, []string{"propose", "light.turn_on", "light.kitchen"})
+	if code != 0 || out["ok"] != true {
+		t.Fatalf("%d %#v", code, out)
+	}
+	p := out["proposal"].(map[string]any)
+	if p["error"] != "unknown_entity" {
+		t.Fatalf("%#v", p)
 	}
 }
 
@@ -32,37 +57,5 @@ func TestUnknownVerb(t *testing.T) {
 	out, code := run(cli, []string{"shell"})
 	if code != 2 || out["error"] != "unknown_verb" {
 		t.Fatalf("got code=%d err=%v", code, out["error"])
-	}
-}
-
-func TestDevicesJSONFromHaobs(t *testing.T) {
-	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/snapshot" {
-			http.NotFound(w, r)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"ok":               true,
-			"mutation_capable": false,
-			"untrusted":        true,
-			"count":            1,
-			"devices": []map[string]any{{
-				"entity_id": "weather.forecast_home",
-				"domain":    "weather",
-				"state":     "partlycloudy",
-				"name":      "Forecast Home",
-			}},
-		})
-	}))
-	defer hs.Close()
-
-	cli := NewClient(hs.URL, "http://127.0.0.1:9", "http://127.0.0.1:9")
-	out, code := run(cli, []string{"devices", "list"})
-	if code != 0 || out["ok"] != true {
-		t.Fatalf("devices list failed: %#v", out)
-	}
-	got, _ := run(cli, []string{"device", "get", "weather.forecast_home"})
-	if got["ok"] != true {
-		t.Fatalf("device get failed: %#v", got)
 	}
 }

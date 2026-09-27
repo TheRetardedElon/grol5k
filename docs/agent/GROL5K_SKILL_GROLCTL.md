@@ -1,32 +1,20 @@
 # GROL5K skill: grolctl
 
-Approved local commands (M3D).
-
 ```
 grolctl.exe --json status
-grolctl.exe --json system status
-grolctl.exe --json house snapshot
 grolctl.exe --json devices list
 grolctl.exe --json device get <entity_id>
-grolctl.exe --json activity recent
+grolctl.exe --json propose light.turn_on light.kitchen
 ```
 
-Optional flags when loopback observers are not the default:
+Propose creates a broker record. It does not turn anything on.
+Expect `decision: denied` and `error: unknown_entity` until a granted
+`light.*` / `switch.*` exists and M4 apply is enabled.
+
+Never:
 
 ```
---ha-observer http://127.0.0.1:8786
---observer    http://127.0.0.1:8787
---bot         http://127.0.0.1:8788
-```
-
-Refused until M4:
-
-```
-grolctl.exe propose ...
 grolctl.exe raw-call ...
-grolctl.exe turn_on ...
+grolctl.exe apply ...
+curl.exe http://.../api/services/...
 ```
-
-Expect `error: mutation_disabled` and exit code 3.
-
-Normative spec: `grol/specs/GROLCTL_V0.md`. Architecture: ADR-0007.

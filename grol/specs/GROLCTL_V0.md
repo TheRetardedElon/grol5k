@@ -1,40 +1,34 @@
 # GROLCTL v0
 
-Narrow command vocabulary official Grok Bot may invoke on the operator PC
-(M3D) and later on the appliance.
-
+Narrow command vocabulary official Grok Bot may invoke.
 Normative with ADR-0007.
 
 ## Transport
-
-M3D: HTTP GET to loopback observers.
 
 ```
 --ha-observer   default http://127.0.0.1:8786
 --observer      default http://127.0.0.1:8787
 --bot           default http://127.0.0.1:8788
+--broker        default http://127.0.0.1:8785
 ```
-
-Later: same verbs against an authenticated GROL bridge on `grol5000.local`.
 
 ## Verbs
 
-| Verb | Reads | Mutates |
-|---|---|---|
-| `status` | haobs + healthd + bot health | no |
-| `system status` | healthd `/v1/snapshot` | no |
-| `house snapshot` | haobs `/v1/snapshot` | no |
-| `devices list` | haobs devices | no |
-| `device get <id>` | one sanitized entity | no |
-| `activity recent` | bot `/v1/activity` | no |
-| `propose ...` | n/a | refused until M4 |
+| Verb | Effect |
+|---|---|
+| `status` | reachability |
+| `system status` | healthd snapshot |
+| `house snapshot` / `devices list` | haobs snapshot |
+| `device get <id>` | one entity + common envelope |
+| `activity recent` | bot activity |
+| `propose SERVICE ENTITY` | create broker proposal; does not actuate |
+| `raw-call` / `turn_on` / `apply` | exit 3 `mutation_disabled` |
 
-Unknown verbs exit 2.
-Mutation-shaped verbs exit 3 with `mutation_disabled`.
+Unknown verbs exit 2. Failed reads exit 4.
 
-## Output
+## Propose
 
-Default: short human text.
-`--json`: one JSON object, `ok`, `untrusted`, `mutation_capable`.
+Does not call Home Assistant. Broker returns `decision: denied` in M4.0
+with `unknown_entity`, `ineligible_service`, `not_granted`, or `haobs_unavailable`.
 
-Official Grok Bot local execution should use `--json`.
+`--json` is the official-Bot-facing mode.
