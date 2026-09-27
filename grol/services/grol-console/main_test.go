@@ -31,6 +31,13 @@ func TestStatusReportsBotAndNestedGatewayHealth(t *testing.T) {
 				"service":"grol-healthd",
 				"reachable":true,
 				"hostd":{"reachable":true}
+			},
+			"ha_observer":{
+				"ok":true,
+				"service":"grol-haobs",
+				"provisioned":true,
+				"reachable":true,
+				"mutation_capable":false
 			}
 		}`)
 	}))
@@ -54,6 +61,10 @@ func TestStatusReportsBotAndNestedGatewayHealth(t *testing.T) {
 	observer, _ := body["observer"].(map[string]any)
 	if observer["reachable"] != true || observer["service"] != "grol-healthd" {
 		t.Fatalf("unexpected observer status: %#v", body)
+	}
+	haObserver, _ := body["ha_observer"].(map[string]any)
+	if haObserver["reachable"] != true || haObserver["service"] != "grol-haobs" || haObserver["provisioned"] != true {
+		t.Fatalf("unexpected HA observer status: %#v", body)
 	}
 }
 
@@ -101,6 +112,8 @@ func TestProxyReadSessionsAndActivity(t *testing.T) {
 			_, _ = io.WriteString(w, `{"ok":true,"activity":[{"session_id":"abc","role":"user","preview":"hi"}]}`)
 		case "/v1/system":
 			_, _ = io.WriteString(w, `{"ok":true,"snapshot":{"status":"ok","system":{"grol_version":"18.4.dev"}}}`)
+		case "/v1/devices":
+			_, _ = io.WriteString(w, `{"ok":true,"snapshot":{"status":"ok","mutation_capable":false,"untrusted":true,"count":1,"devices":[{"entity_id":"weather.forecast_home","domain":"weather","state":"partlycloudy","name":"Forecast home"}]}}`)
 		default:
 			http.NotFound(w, r)
 		}

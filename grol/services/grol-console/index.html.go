@@ -46,6 +46,11 @@ button.send:disabled { opacity:.45; cursor:default; }
 .kv { display:grid; grid-template-columns:minmax(90px,auto) 1fr; gap:6px 12px; font-size:13px; }
 .kv .k { color:var(--mute); }
 .kv .v { overflow-wrap:anywhere; }
+.device-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; margin-top:18px; }
+.device-card { border:1px solid var(--line); border-radius:10px; background:#101419; padding:14px; min-width:0; }
+.device-name { font-weight:700; overflow-wrap:anywhere; }
+.device-meta { color:var(--mute); font-size:12px; margin-top:4px; overflow-wrap:anywhere; }
+.device-state { margin-top:10px; font-size:13px; }
 @media (max-width:720px) {
   .app { grid-template-columns:72px 1fr; }
   .brand { font-size:11px; overflow:hidden; }
@@ -66,7 +71,7 @@ button.send:disabled { opacity:.45; cursor:default; }
   <button class="item" data-view="activity">≡ <span>Activity</span></button>
   <button class="item" data-view="build">◆ <span>Build</span></button>
   <button class="item" data-view="settings">⚙ <span>Settings</span></button>
-  <div class="navfoot">M3C-A · read-only system awareness</div>
+  <div class="navfoot">M3C-B · read-only system + house awareness</div>
 </nav>
 <main>
   <header>
@@ -75,7 +80,7 @@ button.send:disabled { opacity:.45; cursor:default; }
   </header>
 
   <section id="botView">
-    <p class="note">Grok Bot has read-only GROL system awareness through grol-healthd. It still has no Home Assistant, host mutation, Docker, broker, or Build authority.</p>
+    <p class="note">Grok Bot has read-only GROL system and Home Assistant awareness. It still has no Home Assistant service-call, host mutation, Docker, broker, or Build authority.</p>
     <div id="messages"></div>
     <form class="composer" id="chatForm">
       <input id="q" autocomplete="off" placeholder="Talk to Grok Bot"/>
@@ -110,7 +115,7 @@ let sessionId = localStorage.getItem('grol.bot.session_id') || '';
 const labels = {
   bot:['Grok Bot',''],
   overview:['Overview','Live GROL health and summaries land here in M3C.'],
-  devices:['Devices','Read-only Home Assistant entity/device inventory lands here in M3C.'],
+  devices:['Devices','Live read-only Home Assistant entity state from grol-haobs.'],
   system:['System','Live read-only GROL host state.'],
   activity:['Activity','Grok Bot proposals, approvals, and system events land here.'],
   build:['Build','Grok Build remains isolated and unavailable in M3B.'],
@@ -139,17 +144,24 @@ async function refresh() {
     const b = s.bot || {};
     const g = s.gateway || {};
     const o = s.observer || {};
+    const h = s.ha_observer || {};
     const botOK = b.reachable === true && b.ok === true;
     const gatewayOK = g.reachable === true && g.ok === true;
     const observerOK = o.reachable === true && o.ok === true;
     const hostdOK = observerOK && o.hostd && o.hostd.reachable === true;
+    const haObserverOK = h.reachable === true && h.ok === true && h.provisioned === true;
     if (!botOK || !gatewayOK) dot.style.background = 'var(--acc)';
-    else if (!g.provisioned || !hostdOK) dot.style.background = 'var(--warn)';
+    else if (!g.provisioned || !hostdOK || !haObserverOK) dot.style.background = 'var(--warn)';
     else dot.style.background = 'var(--good)';
     if (!botOK) state.textContent = 'grol-bot unreachable';
     else if (!gatewayOK) state.textContent = 'bot online · gateway unreachable';
     else if (!g.provisioned) state.textContent = 'bot online · gateway online · Grok not provisioned';
-    else state.textContent = 'bot + ' + (g.model || 'Grok') + (hostdOK ? ' · system aware' : ' · observer degraded');
+    else {
+      const awareness = [];
+      awareness.push(hostdOK ? 'system aware' : 'system observer degraded');
+      awareness.push(haObserverOK ? 'house aware' : 'HA observer degraded');
+      state.textContent = 'bot + ' + (g.model || 'Grok') + ' · ' + awareness.join(' · ');
+    }
   } catch (_) {
     dot.style.background = 'var(--acc)';
     state.textContent = 'console error';
@@ -287,6 +299,59 @@ function statusCard(title, rows) {
   return card;
 }
 
+async function renderDevices() {
+  placeholderText.textContent = 'Loading read-only Home Assistant state…';
+  systemGrid.replaceChildren();
+  try {
+    const response = await fetch('/api/devices', {cache:'no-store'});
+    const body = await response.json();
+    if (!response.ok || body.ok !== true || !body.snapshot) {
+      throw new Error(body.error || 'HA observer unavailable');
+    }
+
+    const s = body.snapshot;
+    const devices = Array.isArray(s.devices) ? s.devices : [];
+    placeholderText.textContent =
+      'Read-only Home Assistant snapshot · ' + devices.length +
+      ' entities · mutation_capable=' + String(s.mutation_capable) +
+      ' · untrusted=' + String(s.untrusted);
+
+    const grid = document.createElement('div');
+    grid.className = 'device-grid';
+
+    for (const device of devices) {
+      const card = document.createElement('div');
+      card.className = 'device-card';
+
+      const name = document.createElement('div');
+      name.className = 'device-name';
+      name.textContent = device.name || device.entity_id || 'Unnamed entity';
+
+      const meta = document.createElement('div');
+      meta.className = 'device-meta';
+      meta.textContent = (device.domain || 'entity') + ' · ' + (device.entity_id || '');
+
+      const stateEl = document.createElement('div');
+      stateEl.className = 'device-state';
+      stateEl.textContent = 'State: ' + (device.state == null || device.state === '' ? 'unavailable' : String(device.state));
+
+      card.append(name, meta, stateEl);
+      grid.appendChild(card);
+    }
+
+    if (!devices.length) {
+      const empty = document.createElement('div');
+      empty.className = 'status-card';
+      empty.textContent = 'No allowlisted Home Assistant entities are currently visible.';
+      grid.appendChild(empty);
+    }
+
+    systemGrid.appendChild(grid);
+  } catch (err) {
+    placeholderText.textContent = 'HA observer unavailable: ' + err.message;
+  }
+}
+
 async function renderSystem() {
   placeholderText.textContent = 'Loading read-only host state…';
   systemGrid.replaceChildren();
@@ -361,6 +426,7 @@ document.querySelectorAll('button.item').forEach((button) => {
     placeholderText.textContent = desc;
     systemGrid.replaceChildren();
     if (id === 'system') renderSystem();
+    if (id === 'devices') renderDevices();
   });
 });
 
