@@ -41,19 +41,44 @@ func reachable(err error, payload map[string]any) bool {
 	return err == nil && payload != nil
 }
 
+func payloadOK(err error, payload map[string]any) bool {
+	if !reachable(err, payload) {
+		return false
+	}
+	ok, _ := payload["ok"].(bool)
+	return ok
+}
+
 func (c *Client) Status() map[string]any {
-	ha, haErr := c.get(c.ha + "/health")
-	host, hostErr := c.get(c.obs + "/health")
-	bot, botErr := c.get(c.bot + "/health")
+	haHealth, haHealthErr := c.get(c.ha + "/health")
+	house, houseErr := c.get(c.ha + "/v1/snapshot")
+	hostHealth, hostHealthErr := c.get(c.obs + "/health")
+	system, systemErr := c.get(c.obs + "/v1/snapshot")
+	botHealth, botHealthErr := c.get(c.bot + "/health")
+
+	haobsProcess := reachable(haHealthErr, haHealth)
+	houseReachable := payloadOK(houseErr, house)
+	healthdProcess := reachable(hostHealthErr, hostHealth)
+	systemReachable := payloadOK(systemErr, system)
+	botProcess := reachable(botHealthErr, botHealth)
+
+	status := "ok"
+	if !haobsProcess || !houseReachable || !healthdProcess || !systemReachable || !botProcess {
+		status = "degraded"
+	}
+
 	return map[string]any{
-		"ok":                true,
-		"service":           "grolctl",
-		"mode":              "read-only",
-		"mutation_capable":  false,
-		"untrusted":         true,
-		"haobs":             reachable(haErr, ha),
-		"healthd":           reachable(hostErr, host),
-		"bot":               reachable(botErr, bot),
+		"ok":               true,
+		"status":           status,
+		"service":          "grolctl",
+		"mode":             "read-only",
+		"mutation_capable": false,
+		"untrusted":        true,
+		"haobs":            haobsProcess,
+		"house_reachable":  houseReachable,
+		"healthd":          healthdProcess,
+		"system_reachable": systemReachable,
+		"bot":              botProcess,
 	}
 }
 
@@ -67,12 +92,9 @@ func (c *Client) System() map[string]any {
 			"untrusted":        true,
 		}
 	}
-	return map[string]any{
-		"ok":               true,
-		"mutation_capable": false,
-		"untrusted":        true,
-		"snapshot":         snap,
-	}
+	snap["mutation_capable"] = false
+	snap["untrusted"] = true
+	return snap
 }
 
 func (c *Client) House() map[string]any {
@@ -144,10 +166,7 @@ func (c *Client) Activity() map[string]any {
 			"untrusted":        true,
 		}
 	}
-	return map[string]any{
-		"ok":               true,
-		"mutation_capable": false,
-		"untrusted":        true,
-		"activity":         payload["activity"],
-	}
+	payload["mutation_capable"] = false
+	payload["untrusted"] = true
+	return payload
 }
