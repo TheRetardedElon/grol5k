@@ -81,6 +81,7 @@ func (o *Observer) Snapshot() map[string]any {
 	if err != nil {
 		out["ok"] = false
 		out["status"] = "bad_request"
+		out["error"] = err.Error()
 		return out
 	}
 	req.Header.Set("Authorization", "Bearer "+o.token)
@@ -90,6 +91,7 @@ func (o *Observer) Snapshot() map[string]any {
 	if err != nil {
 		out["ok"] = false
 		out["status"] = "ha_unreachable"
+		out["error"] = err.Error()
 		return out
 	}
 	defer resp.Body.Close()
@@ -104,6 +106,7 @@ func (o *Observer) Snapshot() map[string]any {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 4*1024*1024)).Decode(&raw); err != nil {
 		out["ok"] = false
 		out["status"] = "ha_decode"
+		out["error"] = err.Error()
 		return out
 	}
 
