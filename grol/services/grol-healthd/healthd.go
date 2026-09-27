@@ -47,8 +47,13 @@ func (h *Healthd) ListenAndServe(addr string) error {
 
 func (h *Healthd) health(w http.ResponseWriter, _ *http.Request) {
 	_, err := h.hostCall("grol.system.status", nil)
+	status := "ok"
+	if err != nil {
+		status = "degraded"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
+		"status":  status,
 		"service": "grol-healthd",
 		"mode":    "read-only",
 		"hostd": map[string]any{
