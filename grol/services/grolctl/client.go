@@ -48,21 +48,47 @@ func reachable(err error, payload map[string]any) bool {
 	return err == nil && payload != nil
 }
 
+func payloadOK(err error, payload map[string]any) bool {
+	if !reachable(err, payload) {
+		return false
+	}
+	ok, _ := payload["ok"].(bool)
+	return ok
+}
+
 func (c *Client) Status() map[string]any {
-	ha, haErr := c.get(c.ha + "/health")
-	host, hostErr := c.get(c.obs + "/health")
-	bot, botErr := c.get(c.bot + "/health")
-	brk, brkErr := c.get(c.broker + "/health")
+	haHealth, haHealthErr := c.get(c.ha + "/health")
+	house, houseErr := c.get(c.ha + "/v1/snapshot")
+	hostHealth, hostHealthErr := c.get(c.obs + "/health")
+	system, systemErr := c.get(c.obs + "/v1/snapshot")
+	botHealth, botHealthErr := c.get(c.bot + "/health")
+	brkHealth, brkErr := c.get(c.broker + "/health")
+
+	haobsProcess := reachable(haHealthErr, haHealth)
+	houseReachable := payloadOK(houseErr, house)
+	healthdProcess := reachable(hostHealthErr, hostHealth)
+	systemReachable := payloadOK(systemErr, system)
+	botProcess := reachable(botHealthErr, botHealth)
+	brokerProcess := reachable(brkErr, brkHealth)
+
+	status := "ok"
+	if !haobsProcess || !houseReachable || !healthdProcess || !systemReachable || !botProcess {
+		status = "degraded"
+	}
+
 	return map[string]any{
 		"ok":               true,
+		"status":           status,
 		"service":          "grolctl",
 		"mode":             "read-plus-propose",
 		"mutation_capable": false,
 		"untrusted":        true,
-		"haobs":            reachable(haErr, ha),
-		"healthd":          reachable(hostErr, host),
-		"bot":              reachable(botErr, bot),
-		"broker":           reachable(brkErr, brk),
+		"haobs":            haobsProcess,
+		"house_reachable":  houseReachable,
+		"healthd":          healthdProcess,
+		"system_reachable": systemReachable,
+		"bot":              botProcess,
+		"broker":           brokerProcess,
 	}
 }
 
@@ -71,7 +97,9 @@ func (c *Client) System() map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "error": "observer_unavailable", "mutation_capable": false, "untrusted": true}
 	}
-	return map[string]any{"ok": true, "mutation_capable": false, "untrusted": true, "snapshot": snap}
+	snap["mutation_capable"] = false
+	snap["untrusted"] = true
+	return snap
 }
 
 func (c *Client) House() map[string]any {
@@ -91,26 +119,25 @@ func (c *Client) Device(id string) map[string]any {
 	if ok, _ := house["ok"].(bool); !ok {
 		return house
 	}
+	env := func(m map[string]any) map[string]any {
+		return map[string]any{
+			"ok": true, "mutation_capable": false, "untrusted": true,
+			"status": house["status"], "service": house["service"],
+			"captured_at": house["captured_at"], "device": m,
+		}
+	}
 	if raw, ok := house["devices"].([]any); ok {
 		for _, item := range raw {
 			m, _ := item.(map[string]any)
 			if m["entity_id"] == id {
-				return map[string]any{
-					"ok": true, "mutation_capable": false, "untrusted": true,
-					"status": house["status"], "service": house["service"],
-					"captured_at": house["captured_at"], "device": m,
-				}
+				return env(m)
 			}
 		}
 	}
 	if maps, ok := house["devices"].([]map[string]any); ok {
 		for _, m := range maps {
 			if m["entity_id"] == id {
-				return map[string]any{
-					"ok": true, "mutation_capable": false, "untrusted": true,
-					"status": house["status"], "service": house["service"],
-					"captured_at": house["captured_at"], "device": m,
-				}
+				return env(m)
 			}
 		}
 	}
@@ -122,15 +149,13 @@ func (c *Client) Activity() map[string]any {
 	if err != nil {
 		return map[string]any{"ok": false, "error": "bot_unavailable", "mutation_capable": false, "untrusted": true}
 	}
-	return map[string]any{"ok": true, "mutation_capable": false, "untrusted": true, "activity": payload["activity"]}
+	payload["mutation_capable"] = false
+	payload["untrusted"] = true
+	return payload
 }
 
 func (c *Client) Propose(service, entity string) map[string]any {
-	body, _ := json.Marshal(map[string]string{
-		"service":   service,
-		"entity_id": entity,
-		"reason":    "grolctl propose",
-	})
+	body, _ := json.Marshal(map[string]string{"service": service, "entity_id": entity, "reason": "grolctl propose"})
 	resp, err := c.hc.Post(c.broker+"/v1/propose", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return map[string]any{

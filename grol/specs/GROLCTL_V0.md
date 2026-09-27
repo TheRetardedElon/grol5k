@@ -14,21 +14,16 @@ Normative with ADR-0007.
 
 ## Verbs
 
-| Verb | Effect |
-|---|---|
-| `status` | reachability |
-| `system status` | healthd snapshot |
-| `house snapshot` / `devices list` | haobs snapshot |
-| `device get <id>` | one entity + common envelope |
-| `activity recent` | bot activity |
-| `propose SERVICE ENTITY` | create broker proposal; does not actuate |
-| `raw-call` / `turn_on` / `apply` | exit 3 `mutation_disabled` |
+| Verb | Effect | Failure exit |
+|---|---|---|
+| `status` | process vs live reachability (`house_reachable`, `system_reachable`) | 0 |
+| `system status` | healthd snapshot | 4 if `ok:false` |
+| `house snapshot` / `devices list` | haobs snapshot | 4 if `ok:false` |
+| `device get <id>` | one entity + snapshot envelope | 4 if missing/unhealthy |
+| `activity recent` | bot activity | 4 if bot down |
+| `propose SERVICE ENTITY` | broker proposal; no HA call | 4 if broker down |
+| `raw-call` / `turn_on` / `apply` | forbidden | 3 |
 
-Unknown verbs exit 2. Failed reads exit 4.
+Unknown verbs exit 2.
 
-## Propose
-
-Does not call Home Assistant. Broker returns `decision: denied` in M4.0
-with `unknown_entity`, `ineligible_service`, `not_granted`, or `haobs_unavailable`.
-
-`--json` is the official-Bot-facing mode.
+`status` stays exit 0 even when `status: degraded` so the Bot can read the health fields.

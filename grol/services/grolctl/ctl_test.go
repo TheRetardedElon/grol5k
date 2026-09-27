@@ -17,38 +17,52 @@ func TestRawCallStillForbidden(t *testing.T) {
 	}
 }
 
-func TestProposeUsage(t *testing.T) {
+func TestReadFailuresExitNonZero(t *testing.T) {
 	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
-	_, code := run(cli, []string{"propose"})
-	if code != 2 {
-		t.Fatalf("code %d", code)
+	for _, args := range [][]string{
+		{"devices", "list"}, {"system", "status"}, {"activity", "recent"}, {"device", "get", "weather.forecast_home"},
+	} {
+		out, code := run(cli, args)
+		if code != readFailureExit || out["ok"] != false {
+			t.Fatalf("%v code=%d %#v", args, code, out)
+		}
+	}
+}
+
+func TestStatusSeparatesProcessFromLiveHouse(t *testing.T) {
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		case "/v1/snapshot":
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": false, "status": "ha_unreachable"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer hs.Close()
+	cli := NewClient(hs.URL, "http://127.0.0.1:9", "http://127.0.0.1:9")
+	out, code := run(cli, []string{"status"})
+	if code != 0 || out["haobs"] != true || out["house_reachable"] != false || out["status"] != "degraded" {
+		t.Fatalf("%#v", out)
 	}
 }
 
 func TestProposeHitsBroker(t *testing.T) {
 	brk := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/propose" {
-			http.NotFound(w, r)
-			return
-		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok": true,
 			"proposal": map[string]any{
 				"id": "abc", "service": "light.turn_on", "entity_id": "light.kitchen",
 				"decision": "denied", "error": "unknown_entity",
-				"mutation_capable": false,
 			},
 		})
 	}))
 	defer brk.Close()
 	cli := NewClientWithBroker("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9", brk.URL)
 	out, code := run(cli, []string{"propose", "light.turn_on", "light.kitchen"})
-	if code != 0 || out["ok"] != true {
+	if code != 0 || out["proposal"].(map[string]any)["error"] != "unknown_entity" {
 		t.Fatalf("%d %#v", code, out)
-	}
-	p := out["proposal"].(map[string]any)
-	if p["error"] != "unknown_entity" {
-		t.Fatalf("%#v", p)
 	}
 }
 
@@ -56,6 +70,6 @@ func TestUnknownVerb(t *testing.T) {
 	cli := NewClient("http://127.0.0.1:9", "http://127.0.0.1:9", "http://127.0.0.1:9")
 	out, code := run(cli, []string{"shell"})
 	if code != 2 || out["error"] != "unknown_verb" {
-		t.Fatalf("got code=%d err=%v", code, out["error"])
+		t.Fatal(code, out["error"])
 	}
 }
