@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -39,12 +40,12 @@ func (b *Bot) ListenAndServe(addr string) error {
 func (b *Bot) health(w http.ResponseWriter, _ *http.Request) {
 	gw := b.gatewayHealth()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"service":  "grol-bot",
-		"identity": "grol-bot",
-		"product":  "GROL5000",
-		"sessions": b.store.SessionCount(),
-		"gateway":  gw,
+		"ok":        true,
+		"service":   "grol-bot",
+		"identity":  "grol-bot",
+		"product":   "GROL5000",
+		"sessions":  b.store.SessionCount(),
+		"gateway":   gw,
 		"proposals": []any{},
 	})
 }
@@ -56,6 +57,7 @@ func (b *Bot) gatewayHealth() map[string]any {
 		return out
 	}
 	defer resp.Body.Close()
+
 	var health map[string]any
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024)).Decode(&health); err == nil {
 		health["reachable"] = true
@@ -91,6 +93,7 @@ func (b *Bot) chat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "bad_body"})
 		return
 	}
+
 	var req chatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "invalid_json"})
@@ -107,18 +110,24 @@ func (b *Bot) chat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "missing_user_message"})
 		return
 	}
+
 	b.store.Append(sess.ID, Message{Role: "user", Content: user})
 	b.store.Note(sess.ID, "user", user)
 
 	outgoing := []Message{{Role: "system", Content: identityPrompt}}
-	outgoing = append(outgoing, sess.Messages...)
+	outgoing = append(outgoing, b.store.Messages(sess.ID)...)
 
 	payload, _ := json.Marshal(map[string]any{
 		"session_id": sess.ID,
 		"messages":   outgoing,
 		"stream":     req.Stream,
 	})
-	upstream, err := http.NewRequestWithContext(r.Context(), http.MethodPost, b.gateway+"/v1/chat", strings.NewReader(string(payload)))
+	upstream, err := http.NewRequestWithContext(
+		r.Context(),
+		http.MethodPost,
+		b.gateway+"/v1/chat",
+		strings.NewReader(string(payload)),
+	)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": "gateway_request"})
 		return
@@ -133,6 +142,7 @@ func (b *Bot) chat(w http.ResponseWriter, r *http.Request) {
 			"degraded":   true,
 			"session_id": sess.ID,
 			"text":       "grol-ai-gateway is not running.",
+			"proposals":  []any{},
 		})
 		return
 	}
@@ -140,11 +150,19 @@ func (b *Bot) chat(w http.ResponseWriter, r *http.Request) {
 
 	ct := resp.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "text/event-stream") {
-	b.proxySSE(w, resp, sess.ID)
+		b.proxySSE(w, resp, sess.ID)
 		return
 	}
+
 	var reply map[string]any
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&reply)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&reply); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"ok":         false,
+			"error":      "gateway_decode",
+			"session_id": sess.ID,
+		})
+		return
+	}
 	if text, _ := reply["text"].(string); text != "" {
 		b.store.Append(sess.ID, Message{Role: "assistant", Content: text})
 		b.store.Note(sess.ID, "assistant", text)
@@ -159,42 +177,70 @@ func (b *Bot) chat(w http.ResponseWriter, r *http.Request) {
 func (b *Bot) proxySSE(w http.ResponseWriter, resp *http.Response, sessionID string) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(resp.StatusCode)
+
 	flusher, _ := w.(http.Flusher)
+	writeSSE(w, "session", map[string]any{
+		"session_id": sessionID,
+		"proposals":  []any{},
+	})
+	if flusher != nil {
+		flusher.Flush()
+	}
+
 	var assistant strings.Builder
-	buf := make([]byte, 4096)
-	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			chunk := buf[:n]
-			_, _ = w.Write(chunk)
-			if flusher != nil {
-				flusher.Flush()
-			}
-			collectDeltas(chunk, &assistant)
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 16*1024), 1024*1024)
+
+	eventName := "message"
+	dataLines := make([]string, 0, 2)
+
+	flushEvent := func() {
+		if len(dataLines) == 0 {
+			eventName = "message"
+			return
 		}
-		if err != nil {
-			break
+
+		data := strings.Join(dataLines, "\n")
+		_, _ = io.WriteString(w, "event: "+eventName+"\n")
+		for _, line := range dataLines {
+			_, _ = io.WriteString(w, "data: "+line+"\n")
+		}
+		_, _ = io.WriteString(w, "\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+
+		if eventName == "delta" {
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(data), &payload); err == nil {
+				if text, _ := payload["text"].(string); text != "" {
+					assistant.WriteString(text)
+				}
+			}
+		}
+
+		eventName = "message"
+		dataLines = dataLines[:0]
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "":
+			flushEvent()
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
 		}
 	}
+	flushEvent()
+
 	if text := assistant.String(); text != "" {
 		b.store.Append(sessionID, Message{Role: "assistant", Content: text})
 		b.store.Note(sessionID, "assistant", text)
-	}
-}
-
-func collectDeltas(chunk []byte, dst *strings.Builder) {
-	for _, line := range strings.Split(string(chunk), "\n") {
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		var payload map[string]any
-		if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &payload); err != nil {
-			continue
-		}
-		if text, _ := payload["text"].(string); text != "" {
-			dst.WriteString(text)
-		}
 	}
 }
 
@@ -205,6 +251,12 @@ func lastUser(messages []Message) string {
 		}
 	}
 	return ""
+}
+
+func writeSSE(w io.Writer, event string, payload map[string]any) {
+	b, _ := json.Marshal(payload)
+	_, _ = io.WriteString(w, "event: "+event+"\n")
+	_, _ = io.WriteString(w, "data: "+string(b)+"\n\n")
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload map[string]any) {
