@@ -1,14 +1,77 @@
-# grolctl v0
+# GROLCTL v0
 
-Narrow CLI used by Official Grok Bot on the operator PC.
+Narrow command vocabulary official Grok Bot may invoke.
+Normative with ADR-0007.
 
-Bot-approved verbs: status, system status, house snapshot, devices list, device get, activity recent, propose, proposal get, grants list, audit recent.
+## Transport
 
-Operator-only verbs (require `--operator-token` matching broker `GROL_OPERATOR_TOKEN`):
+```
+--ha-observer      default http://127.0.0.1:8786
+--observer         default http://127.0.0.1:8787
+--bot              default http://127.0.0.1:8788
+--broker           default http://127.0.0.1:8785
+--operator-token   operator grant/confirm only; never used by Bot
+```
 
-- grant add / grant revoke
-- proposal confirm
+## Verbs
 
-Confirm sends the frozen `confirm_digest` from the proposal. Apply stays disabled.
+| Verb | Reads | Mutates |
+|---|---|---|
+| `status` | process vs live reachability (`house_reachable`, `system_reachable`, `broker`) | no |
+| `system status` | healthd `/v1/snapshot` | no |
+| `house snapshot` / `devices list` | haobs snapshot | no |
+| `device get <id>` | one entity + snapshot envelope | no |
+| `activity recent` | bot activity | no |
+| `propose SERVICE ENTITY` | creates broker proposal | no HA call |
+| `proposal get ID` | broker proposal record | no |
+| `grants list` | grant drafts / records | no |
+| `audit recent` | broker audit | no |
+| `grant add` / `grant revoke` | operator-only | grant store only |
+| `proposal confirm` | operator-only | confirmation record only |
+| `raw-call` / `turn_on` / `apply` | forbidden | exit 3 |
 
-Grant storage currently keys by `entity_id + service` while also storing `registry_id`, `domain`, and `platform`. Stable-registry-ID lookup and rename following are **deferred** until haobs can prove live registry identity. Unproven grants are non-authorizing drafts.
+## Status semantics (#31)
+
+- `haobs`: grol-haobs process answers
+- `house_reachable`: successful HA snapshot
+- `healthd`: grol-healthd process answers
+- `system_reachable`: successful system snapshot
+- `bot`: local grol-bot answers
+- `broker`: grol-action-broker answers (informational; does not by itself degrade `status`)
+- `status: degraded`: any required live path above except broker is down
+
+`ok: true` on `status` means the command ran. It does **not** mean every subsystem is healthy.
+
+## Exit codes
+
+- 0: `ok: true` (status stays 0 even when `status: degraded`)
+- 2: unknown/invalid verb
+- 3: `mutation_disabled`
+- 4: supported command completed with `ok: false` (including reads, propose, and operator broker commands)
+
+## Propose
+
+Does not call Home Assistant.
+
+`ok: true` on propose means the request was received and recorded, not approved.
+Decision/state is the policy result: `denied`, `not_granted`, `pending_confirmation`, `confirmed`, `expired`.
+
+Unhealthy haobs is `haobs_unavailable`, never `unknown_entity`.
+
+## Operator vs Bot
+
+Bot-approved: the read verbs, `propose`, `proposal get`, `grants list`, `audit recent`.
+
+Operator-only (`--operator-token` matching broker `GROL_OPERATOR_TOKEN` plus `X-GROL-Actor: operator`):
+
+- `grant add` / `grant revoke`
+- `proposal confirm`
+
+Without that token, those verbs return `operator_required`. Confirm must present the frozen `confirm_digest`. Apply stays disabled.
+
+## Grant identity (M4.1 / deferred M4.2)
+
+Grants store `registry_id`, `domain`, and `platform`.
+The map is still keyed by `entity_id + service`.
+Stable-registry-ID lookup and rename following are **deferred** until haobs can prove live registry identity.
+Unproven grants are non-authorizing drafts (`authorizing: false`).
