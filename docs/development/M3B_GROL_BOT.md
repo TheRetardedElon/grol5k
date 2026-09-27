@@ -71,7 +71,18 @@ cd grol/services/grol-console
 go run .
 ```
 
-Open `http://<development-machine>:8790`.
+Open `http://127.0.0.1:8790` on the same development machine.
+
+The M3B console is deliberately loopback-only by default because operator
+authentication is not implemented yet. For a deliberate LAN development test,
+start it explicitly with:
+
+```bash
+go run . -addr 0.0.0.0:8790
+```
+
+Do not bake a LAN-bound unauthenticated console into an OVA. Operator
+authentication/session binding is a required gate before Build #19.
 
 Expected request path:
 
