@@ -19,6 +19,22 @@ jobs:
       with:
         submodules: true
 
+    - name: Set up Go for GROL userspace
+      uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      with:
+        go-version: '1.22.x'
+        cache: false
+
+    - name: Test GROL userspace services
+      run: |
+        for module in grol/services/*/go.mod; do
+          [ -f "$module" ] || continue
+          service="${module%/go.mod}"
+          echo "::group::go test $service"
+          (cd "$service" && go test ./...)
+          echo "::endgroup::"
+        done
+
     - name: Check Dockerfile
       uses: hadolint/hadolint-action@06be81baf89a55ffd0e24b8f04a4185738dd3387 # v3.5.0
       with:
