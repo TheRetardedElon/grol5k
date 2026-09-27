@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -12,26 +14,26 @@ import (
 )
 
 var eligible = map[string]string{
-	"light.turn_on":   "light",
-	"light.turn_off":  "light",
-	"light.toggle":    "light",
-	"switch.turn_on":  "switch",
+	"light.turn_on":  "light",
+	"light.turn_off": "light",
+	"light.toggle":   "light",
+	"switch.turn_on": "switch",
 	"switch.turn_off": "switch",
-	"switch.toggle":   "switch",
+	"switch.toggle":  "switch",
 }
 
 type Proposal struct {
-	ID               string `json:"id"`
-	Service          string `json:"service"`
-	EntityID         string `json:"entity_id"`
-	Reason           string `json:"reason,omitempty"`
-	Decision         string `json:"decision"`
-	Error            string `json:"error,omitempty"`
-	RequiresConfirm  bool   `json:"requires_confirm"`
-	MutationCapable  bool   `json:"mutation_capable"`
-	ApplyEnabled     bool   `json:"apply_enabled"`
-	Untrusted        bool   `json:"untrusted"`
-	CreatedAt        string `json:"created_at"`
+	ID              string `json:"id"`
+	Service         string `json:"service"`
+	EntityID        string `json:"entity_id"`
+	Reason          string `json:"reason,omitempty"`
+	Decision        string `json:"decision"`
+	Error           string `json:"error,omitempty"`
+	RequiresConfirm bool   `json:"requires_confirm"`
+	MutationCapable bool   `json:"mutation_capable"`
+	ApplyEnabled    bool   `json:"apply_enabled"`
+	Untrusted       bool   `json:"untrusted"`
+	CreatedAt       string `json:"created_at"`
 }
 
 type Broker struct {
@@ -49,7 +51,22 @@ func NewBroker(haobs string) *Broker {
 	}
 }
 
+func ListenAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return fmt.Errorf("broker must bind loopback, got %s", addr)
+	}
+	return nil
+}
+
 func (b *Broker) ListenAndServe(addr string) error {
+	if err := ListenAddr(addr); err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", b.health)
 	mux.HandleFunc("POST /v1/propose", b.propose)
@@ -61,10 +78,8 @@ func (b *Broker) ListenAndServe(addr string) error {
 
 func (b *Broker) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":               true,
-		"service":          "grol-action-broker",
-		"apply_enabled":    false,
-		"mutation_capable": false,
+		"ok": true, "service": "grol-action-broker",
+		"apply_enabled": false, "mutation_capable": false,
 	})
 }
 
@@ -92,25 +107,16 @@ func (b *Broker) propose(w http.ResponseWriter, r *http.Request) {
 	b.items[p.ID] = p
 	b.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":               true,
-		"untrusted":        true,
-		"mutation_capable": false,
-		"proposal":         p,
+		"ok": true, "untrusted": true, "mutation_capable": false, "proposal": p,
 	})
 }
 
 func (b *Broker) evaluate(req proposeReq) Proposal {
 	p := Proposal{
-		ID:              newID(),
-		Service:         req.Service,
-		EntityID:        req.EntityID,
-		Reason:          req.Reason,
-		Untrusted:       true,
-		MutationCapable: false,
-		ApplyEnabled:    false,
-		RequiresConfirm: true,
-		CreatedAt:       time.Now().UTC().Format(time.RFC3339),
-		Decision:        "denied",
+		ID: newID(), Service: req.Service, EntityID: req.EntityID, Reason: req.Reason,
+		Untrusted: true, MutationCapable: false, ApplyEnabled: false,
+		RequiresConfirm: true, Decision: "denied",
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
 	}
 	wantDomain, ok := eligible[req.Service]
 	if !ok {
@@ -149,7 +155,24 @@ func (b *Broker) house() (map[string]any, error) {
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 2*1024*1024)).Decode(&snap); err != nil {
 		return nil, err
 	}
+	if !snapshotHealthy(snap) {
+		return nil, fmt.Errorf("haobs unhealthy")
+	}
 	return snap, nil
+}
+
+func snapshotHealthy(snap map[string]any) bool {
+	if snap == nil {
+		return false
+	}
+	if ok, exists := snap["ok"].(bool); exists && !ok {
+		return false
+	}
+	switch snap["status"] {
+	case "ha_unreachable", "ha_error", "degraded":
+		return false
+	}
+	return true
 }
 
 func entityExists(snap map[string]any, id string) bool {
@@ -195,11 +218,9 @@ func (b *Broker) get(w http.ResponseWriter, r *http.Request) {
 
 func (b *Broker) apply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusForbidden, map[string]any{
-		"ok":               false,
-		"error":            "execute_disabled",
-		"mutation_capable": false,
-		"decision":         "denied",
-		"message":          "M4.0 broker records proposals only. Apply/HA service calls are not enabled.",
+		"ok": false, "error": "execute_disabled", "mutation_capable": false,
+		"decision": "denied",
+		"message":  "M4.0 broker records proposals only. Apply/HA service calls are not enabled.",
 	})
 }
 
