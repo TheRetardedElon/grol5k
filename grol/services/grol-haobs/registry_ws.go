@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/tls"
@@ -9,12 +10,20 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
 )
 
-func dialWS(u *url.URL, timeout time.Duration) (net.Conn, error) {
+const maxWSFrame = 1 << 20
+
+type wsConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func dialWS(u *url.URL, timeout time.Duration) (*wsConn, error) {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
@@ -39,7 +48,11 @@ func dialWS(u *url.URL, timeout time.Duration) (net.Conn, error) {
 	}
 	_ = conn.SetDeadline(time.Now().Add(timeout))
 	key := wsKey()
-	req := "GET " + u.RequestURI() + " HTTP/1.1\r\n" +
+	path := u.RequestURI()
+	if path == "" {
+		path = "/"
+	}
+	req := "GET " + path + " HTTP/1.1\r\n" +
 		"Host: " + u.Host + "\r\n" +
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
@@ -49,22 +62,21 @@ func dialWS(u *url.URL, timeout time.Duration) (net.Conn, error) {
 		conn.Close()
 		return nil, err
 	}
-	buf := make([]byte, 4096)
-	n, err := conn.Read(buf)
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, &http.Request{Method: http.MethodGet})
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	head := string(buf[:n])
-	if !strings.Contains(head, " 101 ") {
+	if resp.StatusCode != http.StatusSwitchingProtocols {
 		conn.Close()
-		return nil, fmt.Errorf("websocket upgrade failed")
+		return nil, fmt.Errorf("websocket upgrade failed: %s", resp.Status)
 	}
-	if !strings.Contains(head, wsAccept(key)) {
+	if resp.Header.Get("Sec-WebSocket-Accept") != wsAccept(key) {
 		conn.Close()
 		return nil, fmt.Errorf("websocket accept mismatch")
 	}
-	return conn, nil
+	return &wsConn{Conn: conn, r: br}, nil
 }
 
 func wsKey() string {
@@ -78,7 +90,10 @@ func wsAccept(key string) string {
 	return base64.StdEncoding.EncodeToString(sum[:])
 }
 
-func writeWSText(conn net.Conn, payload []byte) error {
+func writeWSText(conn *wsConn, payload []byte) error {
+	if len(payload) > maxWSFrame {
+		return fmt.Errorf("websocket frame too large")
+	}
 	var mask [4]byte
 	_, _ = rand.Read(mask[:])
 	hdr := []byte{0x81, 0x80}
@@ -92,10 +107,7 @@ func writeWSText(conn net.Conn, payload []byte) error {
 		binary.BigEndian.PutUint16(ext, uint16(n))
 		hdr = append(hdr, ext...)
 	default:
-		hdr[1] |= 127
-		ext := make([]byte, 8)
-		binary.BigEndian.PutUint64(ext, uint64(n))
-		hdr = append(hdr, ext...)
+		return fmt.Errorf("websocket frame too large")
 	}
 	hdr = append(hdr, mask[:]...)
 	masked := make([]byte, n)
@@ -106,10 +118,11 @@ func writeWSText(conn net.Conn, payload []byte) error {
 	return err
 }
 
-func readWSText(conn net.Conn) ([]byte, error) {
+func readWSText(conn *wsConn) ([]byte, error) {
+	r := conn.r
 	for {
 		h := make([]byte, 2)
-		if _, err := io.ReadFull(conn, h); err != nil {
+		if _, err := io.ReadFull(r, h); err != nil {
 			return nil, err
 		}
 		op := h[0] & 0x0f
@@ -117,25 +130,32 @@ func readWSText(conn net.Conn) ([]byte, error) {
 		n := int(h[1] & 0x7f)
 		if n == 126 {
 			ext := make([]byte, 2)
-			if _, err := io.ReadFull(conn, ext); err != nil {
+			if _, err := io.ReadFull(r, ext); err != nil {
 				return nil, err
 			}
 			n = int(binary.BigEndian.Uint16(ext))
 		} else if n == 127 {
 			ext := make([]byte, 8)
-			if _, err := io.ReadFull(conn, ext); err != nil {
+			if _, err := io.ReadFull(r, ext); err != nil {
 				return nil, err
 			}
-			n = int(binary.BigEndian.Uint64(ext))
+			nn := binary.BigEndian.Uint64(ext)
+			if nn > maxWSFrame {
+				return nil, fmt.Errorf("websocket frame too large")
+			}
+			n = int(nn)
+		}
+		if n > maxWSFrame {
+			return nil, fmt.Errorf("websocket frame too large")
 		}
 		var mask [4]byte
 		if masked {
-			if _, err := io.ReadFull(conn, mask[:]); err != nil {
+			if _, err := io.ReadFull(r, mask[:]); err != nil {
 				return nil, err
 			}
 		}
 		payload := make([]byte, n)
-		if _, err := io.ReadFull(conn, payload); err != nil {
+		if _, err := io.ReadFull(r, payload); err != nil {
 			return nil, err
 		}
 		if masked {
