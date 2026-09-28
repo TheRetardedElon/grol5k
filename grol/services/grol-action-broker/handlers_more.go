@@ -14,7 +14,7 @@ func (b *Broker) apply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusForbidden, map[string]any{
 		"ok": false, "error": "execute_disabled", "mutation_capable": false,
 		"decision": "denied",
-		"message":  "M4.1 records grants/confirmation only. HA service calls stay disabled.",
+		"message":  "M4.3 records identity-authorized grants only. HA service calls stay disabled.",
 	})
 }
 
@@ -56,6 +56,9 @@ func (b *Broker) addGrant(w http.ResponseWriter, r *http.Request) {
 	g.Authorizing = g.RegistryID != "" && g.Platform != "" && g.Domain != ""
 	b.mu.Lock()
 	b.grants[grantKey(g.EntityID, g.Service)] = g
+	if g.RegistryID != "" {
+		b.grants[grantKey("reg:"+g.RegistryID, g.Service)] = g
+	}
 	b.recordLocked("grant_added", Proposal{EntityID: g.EntityID, Service: g.Service}, "operator grant")
 	b.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "grant": g})
@@ -64,8 +67,14 @@ func (b *Broker) addGrant(w http.ResponseWriter, r *http.Request) {
 func (b *Broker) listGrants(w http.ResponseWriter, _ *http.Request) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	seen := map[string]struct{}{}
 	out := make([]Grant, 0, len(b.grants))
 	for _, g := range b.grants {
+		id := g.RegistryID + "\x00" + g.Service + "\x00" + g.EntityID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
 		out = append(out, g)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "grants": out})
@@ -79,6 +88,9 @@ func (b *Broker) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	entity := r.PathValue("entity")
 	service := r.PathValue("service")
 	b.mu.Lock()
+	if g, ok := b.grants[grantKey(entity, service)]; ok {
+		delete(b.grants, grantKey("reg:"+g.RegistryID, service))
+	}
 	delete(b.grants, grantKey(entity, service))
 	b.recordLocked("grant_revoked", Proposal{EntityID: entity, Service: service}, "")
 	b.mu.Unlock()
