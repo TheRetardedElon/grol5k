@@ -49,11 +49,24 @@ func (b *Broker) addGrant(w http.ResponseWriter, r *http.Request) {
 	domain, _, _ := strings.Cut(req.EntityID, ".")
 	g := Grant{
 		EntityID: req.EntityID, Service: req.Service, Domain: domain,
-		RegistryID: strings.TrimSpace(req.RegistryID),
-		Platform:   strings.TrimSpace(req.Platform),
 		RequiresConfirm: true, CreatedAt: b.now().Format(time.RFC3339),
 	}
-	g.Authorizing = g.RegistryID != "" && g.Platform != "" && g.Domain != ""
+	snap, err := b.house()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "haobs_unavailable"})
+		return
+	}
+	if !entityExists(snap, req.EntityID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "unknown_entity"})
+		return
+	}
+	regID, liveDomain, platform, proven := deviceIdentity(findDevice(snap, req.EntityID))
+	if liveDomain != "" {
+		g.Domain = liveDomain
+	}
+	g.RegistryID = regID
+	g.Platform = platform
+	g.Authorizing = proven
 	b.mu.Lock()
 	b.grants[grantKey(g.EntityID, g.Service)] = g
 	if g.RegistryID != "" {
@@ -87,11 +100,25 @@ func (b *Broker) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	entity := r.PathValue("entity")
 	service := r.PathValue("service")
+	liveReg := ""
+	if snap, err := b.house(); err == nil {
+		id, _, _, proven := deviceIdentity(findDevice(snap, entity))
+		if proven {
+			liveReg = id
+		}
+	}
 	b.mu.Lock()
-	if g, ok := b.grants[grantKey(entity, service)]; ok {
-		delete(b.grants, grantKey("reg:"+g.RegistryID, service))
+	g, ok := b.lookupGrantLocked(entity, service, liveReg)
+	if ok {
+		delete(b.grants, grantKey(g.EntityID, g.Service))
+		if g.RegistryID != "" {
+			delete(b.grants, grantKey("reg:"+g.RegistryID, g.Service))
+		}
 	}
 	delete(b.grants, grantKey(entity, service))
+	if liveReg != "" {
+		delete(b.grants, grantKey("reg:"+liveReg, service))
+	}
 	b.recordLocked("grant_revoked", Proposal{EntityID: entity, Service: service}, "")
 	b.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
