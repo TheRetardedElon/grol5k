@@ -28,16 +28,18 @@ func (b *Broker) purgeGrantLocked(entity, service, liveReg string) bool {
 		}
 	}
 	if liveReg != "" {
-		delete(b.grants, grantKey("reg:"+liveReg, service))
+		if _, exists := b.grants[grantKey("reg:"+liveReg, service)]; exists {
+			delete(b.grants, grantKey("reg:"+liveReg, service))
+			removed = true
+		}
 		for k, existing := range b.grants {
 			if existing.Service == service && existing.RegistryID == liveReg {
 				delete(b.grants, k)
 				removed = true
 			}
 		}
-		removed = true // live proven identity was resolved; treat matching purge as attempted
 	}
-	if _, ok := b.grants[grantKey(entity, service)]; ok {
+	if _, exists := b.grants[grantKey(entity, service)]; exists {
 		delete(b.grants, grantKey(entity, service))
 		removed = true
 	}
