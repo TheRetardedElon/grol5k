@@ -69,9 +69,20 @@ Operator-only (`--operator-token` matching broker `GROL_OPERATOR_TOKEN` plus `X-
 
 Without that token, those verbs return `operator_required`. Confirm must present the frozen `confirm_digest`. Apply stays disabled.
 
-## Grant identity (M4.1 / deferred M4.2)
+## Grant identity (M4.3)
 
-Grants store `registry_id`, `domain`, and `platform`.
-The map is still keyed by `entity_id + service`.
-Stable-registry-ID lookup and rename following are **deferred** until haobs can prove live registry identity.
-Unproven grants are non-authorizing drafts (`authorizing: false`).
+`grant add ENTITY SERVICE` does not take caller identity fields.
+The broker resolves live haobs identity and stores:
+
+- `registry_id`
+- `domain`
+- `platform`
+- current `entity_id` as an alias only
+
+Canonical grant key is `registry_id + service`.
+`identity_proven` is required for `authorizing: true`.
+A rename with the same registry_id/domain/platform keeps the grant.
+`grant revoke` resolves the current entity through haobs and removes the stable registry grant plus stale entity aliases.
+If haobs is down, revoke fails closed (`haobs_unavailable`) and the grant remains.
+Unproven live identity stores a non-authorizing draft.
+Apply stays disabled. No Home Assistant service call.

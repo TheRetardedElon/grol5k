@@ -14,12 +14,8 @@ import (
 const confirmTTL = 15 * time.Minute
 
 var eligible = map[string]string{
-	"light.turn_on":   "light",
-	"light.turn_off":  "light",
-	"light.toggle":    "light",
-	"switch.turn_on":  "switch",
-	"switch.turn_off": "switch",
-	"switch.toggle":   "switch",
+	"light.turn_on": "light", "light.turn_off": "light", "light.toggle": "light",
+	"switch.turn_on": "switch", "switch.turn_off": "switch", "switch.toggle": "switch",
 }
 
 type Proposal struct {
@@ -77,11 +73,8 @@ type Broker struct {
 
 func NewBroker(haobs string) *Broker {
 	return &Broker{
-		haobs:  strings.TrimRight(haobs, "/"),
-		now:    func() time.Time { return time.Now().UTC() },
-		items:  map[string]Proposal{},
-		grants: map[string]Grant{},
-		hc:     &http.Client{Timeout: 8 * time.Second},
+		haobs: strings.TrimRight(haobs, "/"), now: func() time.Time { return time.Now().UTC() },
+		items: map[string]Proposal{}, grants: map[string]Grant{}, hc: &http.Client{Timeout: 8 * time.Second},
 	}
 }
 
@@ -120,7 +113,7 @@ func (b *Broker) ListenAndServe(addr string) error {
 func (b *Broker) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok": true, "service": "grol-action-broker",
-		"apply_enabled": false, "mutation_capable": false, "mode": "m4.1-grants-confirm",
+		"apply_enabled": false, "mutation_capable": false, "mode": "m4.3-identity-grants",
 	})
 }
 
@@ -187,7 +180,7 @@ func (b *Broker) evaluate(req proposeReq) Proposal {
 	dev := findDevice(snap, req.EntityID)
 	regID, liveDomain, platform, proven := deviceIdentity(dev)
 	b.mu.Lock()
-	g, granted := b.grants[grantKey(req.EntityID, req.Service)]
+	g, granted := b.lookupGrantLocked(req.EntityID, req.Service, regID)
 	b.mu.Unlock()
 	if !granted {
 		p.State = "not_granted"
@@ -218,4 +211,21 @@ func (b *Broker) evaluate(req proposeReq) Proposal {
 	p.ConfirmDigest = confirmDigest(req.Service, args, targets, "confirmation_required")
 	p.ResolvedTargets = targets
 	return p
+}
+
+func (b *Broker) lookupGrantLocked(entity, service, regID string) (Grant, bool) {
+	if regID != "" {
+		if g, ok := b.grants[grantKey("reg:"+regID, service)]; ok {
+			return g, true
+		}
+		for _, g := range b.grants {
+			if g.Service == service && g.RegistryID == regID {
+				return g, true
+			}
+		}
+	}
+	if g, ok := b.grants[grantKey(entity, service)]; ok {
+		return g, true
+	}
+	return Grant{}, false
 }

@@ -14,7 +14,7 @@ func (b *Broker) apply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusForbidden, map[string]any{
 		"ok": false, "error": "execute_disabled", "mutation_capable": false,
 		"decision": "denied",
-		"message":  "M4.1 records grants/confirmation only. HA service calls stay disabled.",
+		"message":  "M4.3 records identity-authorized grants only. HA service calls stay disabled.",
 	})
 }
 
@@ -49,13 +49,26 @@ func (b *Broker) addGrant(w http.ResponseWriter, r *http.Request) {
 	domain, _, _ := strings.Cut(req.EntityID, ".")
 	g := Grant{
 		EntityID: req.EntityID, Service: req.Service, Domain: domain,
-		RegistryID: strings.TrimSpace(req.RegistryID),
-		Platform:   strings.TrimSpace(req.Platform),
 		RequiresConfirm: true, CreatedAt: b.now().Format(time.RFC3339),
 	}
-	g.Authorizing = g.RegistryID != "" && g.Platform != "" && g.Domain != ""
+	snap, err := b.house()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "haobs_unavailable"})
+		return
+	}
+	if !entityExists(snap, req.EntityID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "unknown_entity"})
+		return
+	}
+	regID, liveDomain, platform, proven := deviceIdentity(findDevice(snap, req.EntityID))
+	if liveDomain != "" {
+		g.Domain = liveDomain
+	}
+	g.RegistryID = regID
+	g.Platform = platform
+	g.Authorizing = proven
 	b.mu.Lock()
-	b.grants[grantKey(g.EntityID, g.Service)] = g
+	b.storeGrantLocked(g)
 	b.recordLocked("grant_added", Proposal{EntityID: g.EntityID, Service: g.Service}, "operator grant")
 	b.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "grant": g})
@@ -64,8 +77,14 @@ func (b *Broker) addGrant(w http.ResponseWriter, r *http.Request) {
 func (b *Broker) listGrants(w http.ResponseWriter, _ *http.Request) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	seen := map[string]struct{}{}
 	out := make([]Grant, 0, len(b.grants))
 	for _, g := range b.grants {
+		id := g.RegistryID + "\x00" + g.Service + "\x00" + g.EntityID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
 		out = append(out, g)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "grants": out})
@@ -78,10 +97,26 @@ func (b *Broker) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	entity := r.PathValue("entity")
 	service := r.PathValue("service")
+	snap, err := b.house()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"ok": false, "error": "haobs_unavailable",
+			"message": "revoke requires live identity; grant was not removed",
+		})
+		return
+	}
+	liveReg := ""
+	if id, _, _, proven := deviceIdentity(findDevice(snap, entity)); proven {
+		liveReg = id
+	}
 	b.mu.Lock()
-	delete(b.grants, grantKey(entity, service))
+	removed := b.purgeGrantLocked(entity, service, liveReg)
 	b.recordLocked("grant_revoked", Proposal{EntityID: entity, Service: service}, "")
 	b.mu.Unlock()
+	if !removed {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "grant_not_found"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
