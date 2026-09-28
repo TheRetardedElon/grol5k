@@ -68,10 +68,7 @@ func (b *Broker) addGrant(w http.ResponseWriter, r *http.Request) {
 	g.Platform = platform
 	g.Authorizing = proven
 	b.mu.Lock()
-	b.grants[grantKey(g.EntityID, g.Service)] = g
-	if g.RegistryID != "" {
-		b.grants[grantKey("reg:"+g.RegistryID, g.Service)] = g
-	}
+	b.storeGrantLocked(g)
 	b.recordLocked("grant_added", Proposal{EntityID: g.EntityID, Service: g.Service}, "operator grant")
 	b.mu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "grant": g})
@@ -100,27 +97,26 @@ func (b *Broker) revokeGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	entity := r.PathValue("entity")
 	service := r.PathValue("service")
+	snap, err := b.house()
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"ok": false, "error": "haobs_unavailable",
+			"message": "revoke requires live identity; grant was not removed",
+		})
+		return
+	}
 	liveReg := ""
-	if snap, err := b.house(); err == nil {
-		id, _, _, proven := deviceIdentity(findDevice(snap, entity))
-		if proven {
-			liveReg = id
-		}
+	if id, _, _, proven := deviceIdentity(findDevice(snap, entity)); proven {
+		liveReg = id
 	}
 	b.mu.Lock()
-	g, ok := b.lookupGrantLocked(entity, service, liveReg)
-	if ok {
-		delete(b.grants, grantKey(g.EntityID, g.Service))
-		if g.RegistryID != "" {
-			delete(b.grants, grantKey("reg:"+g.RegistryID, g.Service))
-		}
-	}
-	delete(b.grants, grantKey(entity, service))
-	if liveReg != "" {
-		delete(b.grants, grantKey("reg:"+liveReg, service))
-	}
+	removed := b.purgeGrantLocked(entity, service, liveReg)
 	b.recordLocked("grant_revoked", Proposal{EntityID: entity, Service: service}, "")
 	b.mu.Unlock()
+	if !removed {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "grant_not_found"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
