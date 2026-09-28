@@ -58,6 +58,7 @@ func deviceIdentity(dev map[string]any) (registryID, domain, platform string, pr
 	registryID, _ = dev["registry_id"].(string)
 	domain, _ = dev["domain"].(string)
 	platform, _ = dev["platform"].(string)
-	proven = registryID != "" && domain != "" && platform != ""
+	flag, _ := dev["identity_proven"].(bool)
+	proven = flag && registryID != "" && domain != "" && platform != ""
 	return
 }
