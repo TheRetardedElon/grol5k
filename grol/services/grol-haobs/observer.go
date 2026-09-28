@@ -20,9 +20,10 @@ var allowDomains = map[string]struct{}{
 }
 
 type Observer struct {
-	baseURL string
-	token   string
-	client  *http.Client
+	baseURL        string
+	token          string
+	client         *http.Client
+	lookupRegistry func() (map[string]RegistryEntry, error)
 }
 
 func NewObserver(baseURL, envToken, tokenFile string) *Observer {
@@ -57,11 +58,8 @@ func (o *Observer) ListenAndServe(addr string) error {
 
 func (o *Observer) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":               true,
-		"service":          "grol-haobs",
-		"mode":             "read-only",
-		"provisioned":      o.Provisioned(),
-		"mutation_capable": false,
+		"ok": true, "service": "grol-haobs", "mode": "read-only",
+		"provisioned": o.Provisioned(), "mutation_capable": false,
 	})
 }
 
@@ -71,13 +69,10 @@ func (o *Observer) snapshot(w http.ResponseWriter, _ *http.Request) {
 
 func (o *Observer) Snapshot() map[string]any {
 	out := map[string]any{
-		"ok":               true,
-		"service":          "grol-haobs",
-		"source":           "home-assistant-states",
-		"mutation_capable": false,
-		"untrusted":        true,
-		"captured_at":      time.Now().UTC(),
-		"devices":          []any{},
+		"ok": true, "service": "grol-haobs",
+		"source": "home-assistant-states+entity-registry",
+		"mutation_capable": false, "untrusted": true,
+		"captured_at": time.Now().UTC(), "devices": []any{},
 	}
 	if !o.Provisioned() {
 		out["ok"] = false
@@ -133,14 +128,35 @@ func (o *Observer) Snapshot() map[string]any {
 			}
 		}
 		devices = append(devices, map[string]any{
-			"entity_id": eid,
-			"domain":    domain,
-			"state":     sanitizeLabel(state),
-			"name":      name,
+			"entity_id": eid, "domain": domain, "state": sanitizeLabel(state), "name": name,
+			"registry_id": "", "platform": "", "identity_proven": false,
 		})
 		if len(devices) >= maxEntities {
 			break
 		}
+	}
+	reg, err := o.fetchRegistry()
+	if err != nil {
+		out["registry_status"] = "unavailable"
+	} else {
+		out["registry_status"] = "ok"
+		proven := 0
+		for i := range devices {
+			eid, _ := devices[i]["entity_id"].(string)
+			if entry, ok := reg[eid]; ok {
+				devices[i]["registry_id"] = entry.RegistryID
+				devices[i]["platform"] = entry.Platform
+				if entry.Domain != "" {
+					devices[i]["domain"] = entry.Domain
+				}
+				okID := entry.RegistryID != "" && entry.Platform != "" && devices[i]["domain"] != ""
+				devices[i]["identity_proven"] = okID
+				if okID {
+					proven++
+				}
+			}
+		}
+		out["identity_proven_count"] = proven
 	}
 	out["devices"] = devices
 	out["count"] = len(devices)
