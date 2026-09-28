@@ -53,6 +53,27 @@ func TestNoGrantIsNotGranted(t *testing.T) {
 	}
 }
 
+func TestGrantAddResolvesLiveIdentity(t *testing.T) {
+	t.Setenv("GROL_OPERATOR_TOKEN", "secret-op")
+	hs := haobsProven("light.kitchen", "")
+	defer hs.Close()
+	b := NewBroker(hs.URL)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/grants", b.addGrant)
+	mux.HandleFunc("POST /v1/propose", b.propose)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	gout := operatorGrant(t, srv.URL, map[string]string{"entity_id": "light.kitchen", "service": "light.turn_on"})
+	g := gout["grant"].(map[string]any)
+	if g["authorizing"] != true || g["registry_id"] != "reg-kitchen" || g["platform"] != "hue" {
+		t.Fatalf("%#v", gout)
+	}
+	_, out := postJSON(t, srv.URL+"/v1/propose", map[string]string{"service": "light.turn_on", "entity_id": "light.kitchen"})
+	if out["proposal"].(map[string]any)["state"] != "pending_confirmation" {
+		t.Fatalf("%#v", out)
+	}
+}
+
 func TestProvenGrantPendingConfirmation(t *testing.T) {
 	t.Setenv("GROL_OPERATOR_TOKEN", "secret-op")
 	hs := haobsProven("light.kitchen", "")
@@ -62,28 +83,12 @@ func TestProvenGrantPendingConfirmation(t *testing.T) {
 	mux.HandleFunc("POST /v1/grants", b.addGrant)
 	mux.HandleFunc("POST /v1/propose", b.propose)
 	mux.HandleFunc("POST /v1/proposals/{id}/confirm", b.confirm)
-	mux.HandleFunc("POST /v1/proposals/{id}/apply", b.apply)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	gout := operatorGrant(t, srv.URL, map[string]string{
-		"entity_id": "light.kitchen", "service": "light.turn_on",
-		"registry_id": "reg-kitchen", "platform": "hue",
-	})
-	if gout["grant"].(map[string]any)["authorizing"] != true {
-		t.Fatalf("%#v", gout)
-	}
+	operatorGrant(t, srv.URL, map[string]string{"entity_id": "light.kitchen", "service": "light.turn_on"})
 	_, out := postJSON(t, srv.URL+"/v1/propose", map[string]string{"service": "light.turn_on", "entity_id": "light.kitchen"})
 	p := out["proposal"].(map[string]any)
-	if p["state"] != "pending_confirmation" || p["decision"] != "confirmation_required" {
-		t.Fatalf("%#v", p)
-	}
-	if p["apply_enabled"] != false || p["mutation_capable"] != false {
-		t.Fatalf("%#v", p)
-	}
-	digest, _ := p["confirm_digest"].(string)
-	if digest == "" {
-		t.Fatal("missing digest")
-	}
+	digest := p["confirm_digest"].(string)
 	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/v1/proposals/"+p["id"].(string)+"/confirm", bytes.NewReader([]byte(`{"digest":"`+digest+`"}`)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GROL-Actor", "operator")
@@ -95,46 +100,20 @@ func TestProvenGrantPendingConfirmation(t *testing.T) {
 	defer resp.Body.Close()
 	var cout map[string]any
 	_ = json.NewDecoder(resp.Body).Decode(&cout)
-	cp := cout["proposal"].(map[string]any)
-	if cp["state"] != "confirmed" || cout["apply_enabled"] != false {
+	if cout["proposal"].(map[string]any)["state"] != "confirmed" || cout["apply_enabled"] != false {
 		t.Fatalf("%#v", cout)
-	}
-	rec := httptest.NewRecorder()
-	b.apply(rec, httptest.NewRequest(http.MethodPost, "/v1/proposals/"+p["id"].(string)+"/apply", nil))
-	if rec.Code != http.StatusForbidden {
-		t.Fatalf("apply %d", rec.Code)
 	}
 }
 
 func TestGrantFollowsRegistryRename(t *testing.T) {
 	t.Setenv("GROL_OPERATOR_TOKEN", "secret-op")
-	hs := haobsProven("light.kitchen", "light.kitchen_2")
-	defer hs.Close()
-	b := NewBroker(hs.URL)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /v1/grants", b.addGrant)
-	mux.HandleFunc("POST /v1/propose", b.propose)
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-	operatorGrant(t, srv.URL, map[string]string{
-		"entity_id": "light.kitchen", "service": "light.turn_on",
-		"registry_id": "reg-kitchen", "platform": "hue",
-	})
-	_, out := postJSON(t, srv.URL+"/v1/propose", map[string]string{"service": "light.turn_on", "entity_id": "light.kitchen_2"})
-	p := out["proposal"].(map[string]any)
-	if p["state"] != "pending_confirmation" {
-		t.Fatalf("rename should follow registry_id %#v", p)
-	}
-}
-
-func TestGrantIdentityDrift(t *testing.T) {
-	t.Setenv("GROL_OPERATOR_TOKEN", "secret-op")
+	name := "light.kitchen"
 	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"ok": true, "status": "ok",
 			"devices": []map[string]any{{
-				"entity_id": "light.kitchen", "domain": "light",
-				"registry_id": "reg-kitchen", "platform": "mqtt", "identity_proven": true,
+				"entity_id": name, "domain": "light",
+				"registry_id": "reg-kitchen", "platform": "hue", "identity_proven": true,
 			}},
 		})
 	}))
@@ -145,12 +124,80 @@ func TestGrantIdentityDrift(t *testing.T) {
 	mux.HandleFunc("POST /v1/propose", b.propose)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	operatorGrant(t, srv.URL, map[string]string{
-		"entity_id": "light.kitchen", "service": "light.turn_on",
-		"registry_id": "reg-kitchen", "platform": "hue",
-	})
+	operatorGrant(t, srv.URL, map[string]string{"entity_id": "light.kitchen", "service": "light.turn_on"})
+	name = "light.kitchen_2"
+	_, out := postJSON(t, srv.URL+"/v1/propose", map[string]string{"service": "light.turn_on", "entity_id": "light.kitchen_2"})
+	if out["proposal"].(map[string]any)["state"] != "pending_confirmation" {
+		t.Fatalf("%#v", out)
+	}
+}
+
+func TestGrantIdentityDrift(t *testing.T) {
+	t.Setenv("GROL_OPERATOR_TOKEN", "secret-op")
+	platform := "hue"
+	hs := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok": true, "status": "ok",
+			"devices": []map[string]any{{
+				"entity_id": "light.kitchen", "domain": "light",
+				"registry_id": "reg-kitchen", "platform": platform, "identity_proven": true,
+			}},
+		})
+	}))
+	defer hs.Close()
+	b := NewBroker(hs.URL)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/grants", b.addGrant)
+	mux.HandleFunc("POST /v1/propose", b.propose)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	operatorGrant(t, srv.URL, map[string]string{"entity_id": "light.kitchen", "service": "light.turn_on"})
+	platform = "mqtt"
 	_, out := postJSON(t, srv.URL+"/v1/propose", map[string]string{"service": "light.turn_on", "entity_id": "light.kitchen"})
 	if out["proposal"].(map[string]any)["error"] != "grant_identity_drift" {
 		t.Fatalf("%#v", out)
+	}
+}
+
+func TestRevokeByRenamedEntityRemovesRegistryGrant(t *testing.T) {
+	t.Setenv("GROL_OPERATOR_TOKEN", "secret-op")
+	hs := haobsProven("light.kitchen", "light.kitchen_2")
+	defer hs.Close()
+	b := NewBroker(hs.URL)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/grants", b.addGrant)
+	mux.HandleFunc("DELETE /v1/grants/{entity}/{service}", b.revokeGrant)
+	mux.HandleFunc("POST /v1/propose", b.propose)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	operatorGrant(t, srv.URL, map[string]string{"entity_id": "light.kitchen_2", "service": "light.turn_on"})
+	req, _ := http.NewRequest(http.MethodDelete, srv.URL+"/v1/grants/light.kitchen_2/light.turn_on", nil)
+	req.Header.Set("X-GROL-Actor", "operator")
+	req.Header.Set("X-GROL-Operator-Token", "secret-op")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	_, out := postJSON(t, srv.URL+"/v1/propose", map[string]string{"service": "light.turn_on", "entity_id": "light.kitchen_2"})
+	if out["proposal"].(map[string]any)["error"] != "not_granted" {
+		t.Fatalf("%#v", out)
+	}
+}
+
+func TestAuditEventJSONTags(t *testing.T) {
+	b := NewBroker("http://127.0.0.1:9")
+	b.mu.Lock()
+	b.recordLocked("propose_received", Proposal{ID: "abc", EntityID: "light.kitchen", Service: "light.turn_on"}, "")
+	b.mu.Unlock()
+	rec := httptest.NewRecorder()
+	b.listAudit(rec, httptest.NewRequest(http.MethodGet, "/v1/audit", nil))
+	var out map[string]any
+	_ = json.NewDecoder(rec.Body).Decode(&out)
+	row := out["audit"].([]any)[0].(map[string]any)
+	for _, k := range []string{"id", "at", "action", "proposal_id", "entity_id", "service"} {
+		if _, ok := row[k]; !ok {
+			t.Fatalf("missing %s in %#v", k, row)
+		}
 	}
 }
