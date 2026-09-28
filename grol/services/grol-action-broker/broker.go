@@ -49,17 +49,26 @@ type Grant struct {
 }
 
 type AuditEvent struct {
-	ID, At, Action, Proposal, EntityID, Service, State, Decision, Error, Detail string
+	ID       string `json:"id"`
+	At       string `json:"at"`
+	Action   string `json:"action"`
+	Proposal string `json:"proposal_id,omitempty"`
+	EntityID string `json:"entity_id,omitempty"`
+	Service  string `json:"service,omitempty"`
+	State    string `json:"state,omitempty"`
+	Decision string `json:"decision,omitempty"`
+	Error    string `json:"error,omitempty"`
+	Detail   string `json:"detail,omitempty"`
 }
 
 type Broker struct {
-	haobs string
-	now   func() time.Time
-	mu    sync.Mutex
-	items map[string]Proposal
+	haobs  string
+	now    func() time.Time
+	mu     sync.Mutex
+	items  map[string]Proposal
 	grants map[string]Grant
-	audit []AuditEvent
-	hc    *http.Client
+	audit  []AuditEvent
+	hc     *http.Client
 }
 
 func NewBroker(haobs string) *Broker {
